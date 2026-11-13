@@ -24,6 +24,7 @@ const CATALOG: Catalog = {
   INTERNAL_ERROR: { ar: 'حدث خطأ، حاول لاحقا', en: 'Something went wrong, please try again' },
   SERVICE_UNAVAILABLE: { ar: 'الخدمة غير متاحة مؤقتا', en: 'Service temporarily unavailable' },
   BAD_GATEWAY: { ar: 'خطأ في مزود خارجي', en: 'Upstream provider error' },
+  CONFLICT: { ar: 'تعارض في البيانات', en: 'Resource conflict' },
 
   AUTH_OTP_EXPIRED: { ar: 'انتهت صلاحية الرمز', en: 'The code has expired' },
   AUTH_OTP_INVALID: { ar: 'الرمز غير صحيح', en: 'The code is invalid' },

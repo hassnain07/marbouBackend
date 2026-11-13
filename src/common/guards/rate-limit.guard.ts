@@ -13,10 +13,20 @@ import { getDeviceId } from '../request-context';
 import { configuration } from '../../config/configuration';
 
 /**
- * RateLimitGuard — Redis-backed fixed-window counters keyed by IP (and account/
- * device when auth is present). Reads the `@RateLimit` decorator for per-route
- * overrides; falls back to the env-configured default (§5.7, AUTH-17, NFR-SEC-05).
- * Responds with RATE_LIMITED (429) and Retry-After when the limit is exceeded.
+ * RateLimitGuard — Redis fixed-window counter per [controller:handler:scope].
+ *
+ * Key composition (AUTH-17, NFR-SEC-05):
+ *   rl:{controllerClass}:{handlerName}:{ip}[:{deviceId}][:{userId}]
+ *
+ * The @RateLimit `scope` option restricts the key to a single dimension:
+ *   'ip'      → rl:ctrl:handler:ip
+ *   'account' → rl:ctrl:handler:ip:u:{userId}  (falls back to ip when no user)
+ *   'device'  → rl:ctrl:handler:ip:{deviceId}  (falls back to ip when no device)
+ *   default   → rl:ctrl:handler:ip[:{deviceId}][:{userId}]
+ *
+ * Degrades open (allow) when Redis is unavailable (NFR-REL-04).
+ * Sends Retry-After and X-RateLimit-* headers only when a request is blocked (429).
+ * X-RateLimit-Limit and X-RateLimit-Remaining are added on successful requests.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -28,52 +38,74 @@ export class RateLimitGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const options = this.reflector.get<RateLimitOptions>(RATE_LIMIT_KEY, context.getHandler());
-    const req = context.switchToHttp().getRequest<any>();
-
-    // If Redis isn't connected, degrade open rather than stalling every request
-    // on retry backoff (NFR-REL-04). Health checks still report Redis as down.
+    // If Redis is not ready, degrade open — health check reports it.
     if (this.redis.client.status !== 'ready') {
       return true;
     }
 
+    const options = this.reflector.get<RateLimitOptions | undefined>(
+      RATE_LIMIT_KEY,
+      context.getHandler(),
+    );
+
     const windowSeconds = options?.windowSeconds ?? 60;
     const max = options?.max ?? configuration.RATE_LIMIT_DEFAULT_PER_MINUTE;
+    const scope = options?.scope;
 
+    const req = context.switchToHttp().getRequest<any>();
     const ip = this.resolveIp(req);
-    const device = getDeviceId(req) ?? 'anon';
+    const deviceId = getDeviceId(req); // undefined when header absent
     const account = (req.user as { id?: string } | undefined)?.id;
 
-    const parts = ['rl', context.getHandler().name, ip, device];
-    if (account) parts.push(`u:${account}`);
-    const key = parts.join(':');
+    // Build the controller:handler prefix.
+    const ctrlName = context.getClass().name;
+    const handlerName = context.getHandler().name;
+    const prefix = `rl:${ctrlName}:${handlerName}`;
+
+    // Build the identity suffix based on scope.
+    let key: string;
+    if (scope === 'ip') {
+      key = `${prefix}:${ip}`;
+    } else if (scope === 'account') {
+      key = account ? `${prefix}:${ip}:u:${account}` : `${prefix}:${ip}`;
+    } else if (scope === 'device') {
+      key = deviceId ? `${prefix}:${ip}:d:${deviceId}` : `${prefix}:${ip}`;
+    } else {
+      // Default: IP + optional device + optional account
+      const parts = [prefix, ip];
+      if (deviceId) parts.push(`d:${deviceId}`);
+      if (account) parts.push(`u:${account}`);
+      key = parts.join(':');
+    }
 
     try {
       const result = await this.redis.rateLimit(key, windowSeconds, max);
+      const res = context.switchToHttp().getResponse<any>();
+
       if (!result.allowed) {
-        throw AppError.rateLimited(
-          ErrorCodes.RATE_LIMITED,
-        );
+        // Set Retry-After on the 429 response BEFORE throwing.
+        res.setHeader('Retry-After', String(result.retryAfter));
+        res.setHeader('X-RateLimit-Limit', String(max));
+        res.setHeader('X-RateLimit-Remaining', '0');
+        throw AppError.rateLimited(ErrorCodes.RATE_LIMITED);
       }
-      // Stamp the response headers so clients can back off intelligently.
-      const res = context.switchToHttp().getResponse();
-      res.setHeader('X-RateLimit-Limit', max);
-      res.setHeader('X-RateLimit-Remaining', Math.max(0, max - result.count));
-      res.setHeader('Retry-After', String(result.retryAfter));
+
+      // Informational rate-limit headers on successful requests (no Retry-After).
+      res.setHeader('X-RateLimit-Limit', String(max));
+      res.setHeader('X-RateLimit-Remaining', String(Math.max(0, max - result.count)));
       return true;
     } catch (err) {
       if (err instanceof AppError) throw err;
-      // Redis unavailable → degrade open (don't block all traffic on a cache
-      // failure, NFR-REL-04) but log it so ops sees the outage.
-      this.logger.warn(`Rate-limit check skipped (Redis unavailable): ${(err as Error).message}`);
+      // Redis error (e.g., timeout) → degrade open and log.
+      this.logger.warn(`Rate-limit check skipped (Redis error): ${(err as Error).message}`);
       return true;
     }
   }
 
   private resolveIp(req: any): string {
-    const fwd = (req.headers?.['x-forwarded-for'] as string) ?? '';
-    const direct = fwd.split(',')[0]?.trim();
-    if (direct && /^[A-Za-z0-9.:]{1,64}$/.test(direct)) return direct;
+    const fwd = (req.headers?.['x-forwarded-for'] as string | undefined) ?? '';
+    const direct = fwd.split(',')[0]?.trim() ?? '';
+    if (direct && /^[A-Za-z0-9.:[\]]{1,64}$/.test(direct)) return direct;
     return String(req.ip ?? 'unknown');
   }
 }

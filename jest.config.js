@@ -7,6 +7,7 @@ module.exports = {
   transform: {
     '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.json', isolatedModules: true, diagnostics: false }],
   },
+  setupFiles: ['<rootDir>/test/setup-env.ts'],
   collectCoverageFrom: ['src/**/*.ts', '!src/main.ts', '!src/bootstrap.ts', '!**/*.module.ts', '!**/*.spec.ts'],
   coverageDirectory: './coverage',
   coverageThreshold: {

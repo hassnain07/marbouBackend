@@ -13,12 +13,14 @@ import { ErrorCodes, STATUS_BY_CODE } from '../errors/error-codes';
 import { localizeError } from '../i18n/messages';
 import { getLocale, getRequestId } from '../request-context';
 import type { ErrorEnvelope } from '../envelope';
+import { captureError } from '../../integrations/monitoring/sentry';
 
 /**
  * AllExceptionsFilter — converts every thrown error into the structured error
  * envelope (architecture §5.2):
  *   { success: false, error: { code, message, details, traceId } }
  * Messages are localised from the request's resolved locale.
+ * 5xx errors are forwarded to Sentry (captureError).
  */
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -38,6 +40,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         `Unhandled error: ${exception instanceof Error ? exception.message : String(exception)}`,
         exception instanceof Error ? exception.stack : undefined,
       );
+      captureError(exception);
     }
 
     if (!res.headersSent) {
@@ -51,9 +54,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
     traceId?: string,
   ): { status: number; envelope: ErrorEnvelope } {
     if (exception instanceof AppError) {
-      const message = exception.message && exception.message !== exception.code
-        ? exception.message
-        : localizeError(exception.code, lang);
+      const message =
+        exception.message && exception.message !== exception.code
+          ? exception.message
+          : localizeError(exception.code, lang);
       return {
         status: exception.status,
         envelope: {
@@ -76,7 +80,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
           error: {
             code: ErrorCodes.VALIDATION_FAILED,
             message: localizeError(ErrorCodes.VALIDATION_FAILED, lang),
-            details: exception.issues.map((i) => ({ field: i.path.join('.') || undefined, issue: i.message })),
+            details: exception.issues.map((i) => ({
+              field: i.path.join('.') || undefined,
+              issue: i.message,
+            })),
             traceId,
           },
         },
@@ -119,23 +126,30 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return undefined;
   }
 
-  private extractMessage(response: unknown, code: string, lang: ReturnType<typeof getLocale>): string {
+  private extractMessage(
+    response: unknown,
+    code: string,
+    lang: ReturnType<typeof getLocale>,
+  ): string {
     if (typeof response === 'string') return response;
     if (typeof response === 'object' && response !== null) {
       const r = response as Record<string, unknown>;
-      const raw = Array.isArray(r.message) && r.message.length
-        ? String(r.message[0])
-        : typeof r.message === 'string'
-          ? r.message
-          : undefined;
+      const raw =
+        Array.isArray(r.message) && r.message.length
+          ? String(r.message[0])
+          : typeof r.message === 'string'
+            ? r.message
+            : undefined;
       // Nest's default not-found handler produces "Cannot {METHOD} {url}"; localise
-      // those defaults. Custom HttpException messages are preserved.
+      // those defaults. Custom HttpException messages are preserved as-is.
       if (raw && !raw.startsWith('Cannot ')) return raw;
     }
     return localizeError(code, lang);
   }
 
-  private extractDetails(response: unknown): { field?: string; issue: string }[] | undefined {
+  private extractDetails(
+    response: unknown,
+  ): { field?: string; issue: string }[] | undefined {
     if (typeof response === 'object' && response !== null) {
       const r = response as Record<string, unknown>;
       if (Array.isArray(r.details)) return r.details as { field?: string; issue: string }[];
@@ -154,7 +168,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       case 404:
         return ErrorCodes.NOT_FOUND;
       case 409:
-        return ErrorCodes.IDEMPOTENCY_CONFLICT;
+        return ErrorCodes.CONFLICT; // generic conflict — not idempotency-specific
       case 422:
         return ErrorCodes.VALIDATION_FAILED;
       case 429:
@@ -165,6 +179,4 @@ export class AllExceptionsFilter implements ExceptionFilter {
   }
 }
 
-// STATUS_BY_CODE is re-exported so guards/services can map codes without importing
-// the registry twice (kept here to avoid a circular import in some setups).
 export { STATUS_BY_CODE };

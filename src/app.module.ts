@@ -55,6 +55,8 @@ import { PlatformModule } from './modules/platform/platform.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(RequestIdMiddleware, LocaleMiddleware, DeviceIdMiddleware).forRoutes('*');
+    // '{*path}' is the Express 5 / Nest 11 wildcard — avoids the deprecation warning
+    // that '*' triggers in Nest 11's path-matching layer.
+    consumer.apply(RequestIdMiddleware, LocaleMiddleware, DeviceIdMiddleware).forRoutes('{*path}');
   }
 }
