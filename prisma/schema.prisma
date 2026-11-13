@@ -1,0 +1,622 @@
+// Core database schema for MARBOU (V3 corrected specification, PRD §9.2).
+// Source of truth: MARBOU_PRD_V3.md §9.2. Fixes applied in Phase 0 are logged in
+// docs/schema-decisions.md. PostGIS/pg_trgm are declared in the datasource so the
+// generated init migration creates them before the `Unsupported` geography
+// `location` column. GIN/trigram/GiST/partitioning indexes are added later by
+// hand-written SQL migrations (Phase 6+) — see architecture doc §6.
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis, pg_trgm]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+// ---------- Enums ----------
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+  PENDING_DELETION
+}
+enum Capability {
+  SELLER
+  DEALER
+  EMPLOYER
+  SERVICE_PROVIDER
+  CANDIDATE
+}
+enum AdminRole {
+  SUPER_ADMIN
+  CONTENT_MODERATOR
+  SUPPORT_AGENT
+  FINANCIAL_AUDITOR
+}
+enum Language {
+  AR
+  EN
+}
+enum Currency {
+  SDG
+  USD
+}
+
+enum ListingType {
+  SALE
+  RENT
+  WANTED
+  SERVICE
+  JOB_REFERENCE
+}
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  HIDDEN // moderator action
+  AUTO_HIDDEN // system: report or risk threshold
+  SUSPENDED
+  SOLD
+  EXPIRED
+  ARCHIVED
+}
+// "Submitted" is transient (resolves to ACTIVE in the same request); soft delete uses Listing.deletedAt.
+
+enum AttributeType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  SINGLE_SELECT
+  MULTI_SELECT
+  DATE
+  RANGE
+  FILE_URL
+}
+enum MessageType {
+  TEXT
+  IMAGE
+  OFFER
+  SYSTEM
+}
+enum OfferStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  COUNTERED
+  WITHDRAWN
+}
+enum CvBuildStatus {
+  PENDING
+  IN_PROGRESS
+  DELIVERED
+  REVISION_REQUESTED
+  APPROVED
+}
+enum ApplicationStatus {
+  SUBMITTED
+  VIEWED
+  SHORTLISTED
+  INTERVIEW
+  REJECTED
+  HIRED
+  WITHDRAWN
+}
+enum ReviewContext {
+  CHAT
+  RENTAL
+  APPOINTMENT
+  HOTEL_INQUIRY
+}
+
+// ---------- Identity & access ----------
+model User {
+  id                  String        @id @default(uuid())
+  email               String?       @unique
+  emailVerifiedAt     DateTime?
+  phoneNumber         String? // contact field, NOT unique
+  verifiedPhoneNumber String?       @unique // set only after phone OTP (flag OFF at launch)
+  passwordHash        String?
+  fullName            String
+  avatarUrl           String?
+  language            Language      @default(AR)
+  status              AccountStatus @default(ACTIVE)
+  statusReason        String?
+  countryId           String?
+  country             Country?      @relation(fields: [countryId], references: [id])
+  deletionRequestedAt DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  deletedAt           DateTime?
+
+  capabilities     UserCapability[]
+  badges           UserBadge[]
+  sessions         Session[]
+  socialIdentities SocialIdentity[]
+  listings         Listing[]
+  candidateProfile CandidateProfile?
+  cvRequests       CvBuildRequest[]
+  threadsAsBuyer   ChatThread[] @relation("ThreadBuyer")
+  threadsAsSeller  ChatThread[] @relation("ThreadSeller")
+  sentMessages     ChatMessage[] @relation("SentMessages")
+  favorites        Favorite[]
+
+  @@index([status])
+}
+
+model UserCapability {
+  id        String     @id @default(uuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  capability Capability
+  grantedAt DateTime   @default(now())
+  revokedAt DateTime?
+  @@unique([userId, capability])
+}
+
+model UserBadge {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  badge      String // VERIFIED_SELLER | VERIFIED_DEALER | VERIFIED_BUSINESS | VERIFIED_EMPLOYER | VERIFIED_SERVICE_PROVIDER
+  grantedBy  String // AdminUser.id
+  grantedAt  DateTime  @default(now())
+  revokedAt DateTime?
+  @@index([userId])
+}
+
+model SocialIdentity {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  provider    String // GOOGLE | FACEBOOK | APPLE
+  providerId  String
+  email      String?
+  createdAt  DateTime @default(now())
+  @@unique([provider, providerId])
+}
+
+model Session {
+  id             String    @id @default(uuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id])
+  familyId       String // refresh-token family for reuse detection
+  refreshHash    String
+  deviceName     String?
+  os             String?
+  approxLocation String?
+  lastActiveAt   DateTime  @default(now())
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  @@index([userId])
+  @@index([familyId])
+}
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  fullName     String
+  role         AdminRole
+  totpSecret   String // encrypted; 2FA mandatory
+  ipAllowlist  String[]
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// ---------- Geography ----------
+model Country {
+  id             String  @id @default(uuid())
+  code            String  @unique // SD
+  dialCode        String // +249
+  nameEn          String
+  nameAr          String
+  defaultCurrency Currency
+  isActive        Boolean @default(true)
+  states          State[]
+  users           User[]
+  listings        Listing[]
+}
+
+model State {
+  id        String  @id @default(uuid())
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id])
+  nameEn    String
+  nameAr    String
+  cities    City[]
+  @@index([countryId])
+}
+
+model City {
+  id       String  @id @default(uuid())
+  stateId  String
+  state    State   @relation(fields: [stateId], references: [id])
+  nameEn   String
+  nameAr   String
+  listings Listing[]
+  @@index([stateId])
+}
+
+// ---------- Catalog (EAV) ----------
+model Category {
+  id                String     @id @default(uuid())
+  parentId          String?
+  parent            Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children          Category[] @relation("CategoryHierarchy")
+  slug              String     @unique
+  nameEn            String
+  nameAr            String
+  iconUrl           String?
+  displayOrder      Int        @default(0)
+  isActive          Boolean    @default(true)
+  isArchived        Boolean    @default(false)
+  postingRestricted Boolean    @default(false)
+  postingMessage    String?
+  expiryDays        Int        @default(30)
+  attributes        CategoryAttribute[]
+  listings         Listing[]
+  @@index([parentId])
+}
+
+model CategoryAttribute {
+  id              String       @id @default(uuid())
+  categoryId      String
+  category        Category     @relation(fields: [categoryId], references: [id])
+  attributeKey    String // immutable
+  labelEn         String
+  labelAr         String
+  dataType        AttributeType
+  isRequired      Boolean      @default(false)
+  isFilterable    Boolean      @default(true)
+  isSearchable    Boolean      @default(false)
+  isArchived      Boolean      @default(false)
+  promoteToIndex  Boolean      @default(false) // expression index / promoted column
+  displayOrder    Int          @default(0)
+  optionsList     Json? // array of options, may carry dependsOn
+  validationRules Json? // min, max, regex
+  @@unique([categoryId, attributeKey])
+  @@index([categoryId])
+}
+
+model OtherEntry {
+  id         String   @id @default(uuid())
+  categoryId String
+  text       String
+  count      Int      @default(1)
+  promotedTo String?
+  createdAt  DateTime @default(now())
+  @@index([categoryId, text])
+}
+
+model CategorySchemaVersion {
+  id         String   @id @default(uuid())
+  categoryId  String
+  version    Int
+  schemaJson  Json
+  etag        String
+  createdAt   DateTime @default(now())
+  @@unique([categoryId, version])
+  @@index([categoryId])
+}
+
+// ---------- Listings ----------
+model Listing {
+  id              String        @id @default(uuid())
+  publicSeq       Int           @unique @default(autoincrement()) // rendered as MARBOU-00001
+  ownerId         String
+  owner           User          @relation(fields: [ownerId], references: [id])
+  businessId      String?
+  countryId       String
+  country         Country       @relation(fields: [countryId], references: [id])
+  cityId          String?
+  city            City?         @relation(fields: [cityId], references: [id])
+  categoryId      String
+  category        Category      @relation(fields: [categoryId], references: [id])
+  listingType     ListingType   @default(SALE)
+  title           String
+  description     String
+  price           Decimal?      @db.Decimal(14, 2)
+  budgetMin       Decimal?      @db.Decimal(14, 2) // Wanted listings
+  budgetMax       Decimal?      @db.Decimal(14, 2)
+  currency        Currency      @default(SDG)
+  isNegotiable    Boolean       @default(true)
+  condition       String?
+  status          ListingStatus @default(ACTIVE)
+  statusReason    String?
+  isCustomOther   Boolean       @default(false)
+  customOtherText String?
+  // PostGIS geography(Point,4326) "location" — raw-SQL only, Prisma reads/writes via raw SQL.
+  location Unsupported("geography(Point,4326)")?
+  locationName      String?
+  isApproxLocation Boolean       @default(false)
+  approxRadiusM     Int?
+  contactOptions    Json // { call, whatsapp, chat }
+  dynamicAttributes Json // EAV payload key-value pairs
+  searchTextNormalized String? // Arabic-normalized text for trigram search (§6)
+  qualityScore      Int           @default(0)
+  viewCount         Int           @default(0)
+  videoUrl          String?
+  publishedAt      DateTime?
+  expiresAt         DateTime?
+  soldAt            DateTime?
+  deletedAt         DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  media     ListingMedia[]
+  edits     ListingEdit[]
+  threads   ChatThread[]
+  favorites Favorite[]
+
+  @@index([categoryId, status, publishedAt])
+  @@index([ownerId, status])
+  @@index([countryId, cityId, status])
+  // GIN on dynamicAttributes, trigram on title, GiST on location, and expression indexes
+  // for promoteToIndex attributes are created in SQL migrations. Listing is range-partitioned by createdAt.
+}
+
+model ListingMedia {
+  id        String  @id @default(uuid())
+  listingId String
+  listing   Listing @relation(fields: [listingId], references: [id])
+  url       String // WebP / AVIF
+  thumbUrl  String?
+  position  Int
+  isCover   Boolean @default(false)
+  phash     String? // perceptual hash
+  @@index([listingId, position])
+  @@index([phash])
+}
+
+model ListingEdit {
+  id        String   @id @default(uuid())
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  editorId  String
+  diff      Json
+  createdAt DateTime @default(now())
+  @@index([listingId])
+}
+
+model Favorite {
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  listingId   String
+  listing     Listing  @relation(fields: [listingId], references: [id])
+  priceAtSave Decimal? @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+  @@id([userId, listingId])
+}
+
+// ---------- Messaging ----------
+model ChatThread {
+  id              String    @id @default(uuid())
+  listingId       String?
+  listing         Listing?  @relation(fields: [listingId], references: [id])
+  buyerId         String
+  buyer           User      @relation("ThreadBuyer", fields: [buyerId], references: [id])
+  sellerId        String
+  seller          User      @relation("ThreadSeller", fields: [sellerId], references: [id])
+  businessId      String?
+  lastMessageAt   DateTime?
+  isMutedByBuyer  Boolean   @default(false)
+  isMutedBySeller Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  messages        ChatMessage[]
+  offers          Offer[]
+  @@unique([listingId, buyerId, sellerId])
+  @@index([sellerId])
+  @@index([buyerId])
+}
+
+model ChatMessage {
+  id             String       @id @default(uuid())
+  threadId       String
+  thread         ChatThread   @relation(fields: [threadId], references: [id])
+  senderId       String
+  sender         User         @relation("SentMessages", fields: [senderId], references: [id])
+  type           MessageType  @default(TEXT)
+  body           String?
+  attachmentUrl  String?
+  idempotencyKey String
+  sentAt         DateTime     @default(now())
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  offer          Offer?
+  @@unique([senderId, idempotencyKey])
+  @@index([threadId, sentAt])
+}
+
+model Offer {
+  id          String      @id @default(uuid())
+  threadId    String
+  thread      ChatThread  @relation(fields: [threadId], references: [id])
+  messageId   String      @unique
+  message     ChatMessage @relation(fields: [messageId], references: [id])
+  offeredById String
+  amount      Decimal      @db.Decimal(14, 2)
+  currency    Currency
+  status      OfferStatus  @default(PENDING)
+  counterOfId String?
+  createdAt   DateTime    @default(now())
+  @@index([threadId])
+}
+
+// ---------- Jobs ----------
+model CandidateProfile {
+  id                String    @id @default(uuid())
+  userId            String    @unique
+  user              User      @relation(fields: [userId], references: [id])
+  dateOfBirth       DateTime?
+  nationality       String?
+  city              String?
+  maritalStatus     String?
+  hasDrivingLicense Boolean   @default(false)
+  licenseCategory   String?
+  licenseIssueDate  DateTime?
+  ownsVehicle       Boolean   @default(false)
+  vehicleDetails    String?
+  educationHistory   Json      @default("[]")
+  workExperience    Json      @default("[]")
+  skills            String[]
+  languages         Json      @default("[]") // language + proficiency (NATIVE|FLUENT|INTERMEDIATE|BASIC)
+  certificateUrls   String[] // private-bucket keys, never public URLs
+  cvFileUrl         String? // private-bucket key
+  isPrivate         Boolean   @default(true)
+  updatedAt         DateTime  @updatedAt
+}
+
+model CvBuildRequest {
+  id           String        @id @default(uuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id])
+  payload      Json // structured step-by-step form data
+  status       CvBuildStatus @default(PENDING)
+  assignedTo   String? // AdminUser.id (Support Agent)
+  deliveredUrl String?
+  revisionNote String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  @@index([status, createdAt])
+}
+
+model Job {
+  id             String        @id @default(uuid())
+  employerId     String
+  title          String
+  categoryId     String
+  employmentType String // FULL_TIME | PART_TIME | CONTRACT | DAILY
+  salaryMin      Decimal?      @db.Decimal(14, 2)
+  salaryMax      Decimal?      @db.Decimal(14, 2)
+  currency       Currency?
+  details        Json
+  deadline       DateTime?
+  status         ListingStatus @default(ACTIVE)
+  createdAt      DateTime      @default(now())
+  applications   JobApplication[]
+  @@index([employerId])
+  @@index([categoryId])
+}
+
+model JobApplication {
+  id          String            @id @default(uuid())
+  jobId       String
+  job         Job               @relation(fields: [jobId], references: [id])
+  candidateId String
+  tier        String // QUICK | FULL
+  snapshot    Json // data shared with employer for this job only
+  status      ApplicationStatus @default(SUBMITTED)
+  notes       String?
+  createdAt   DateTime          @default(now())
+  @@unique([jobId, candidateId])
+  @@index([candidateId])
+}
+
+// ---------- Trust & operations ----------
+model Review {
+  id         String        @id @default(uuid())
+  reviewerId String
+  subjectId  String
+  context    ReviewContext
+  contextRef String // thread / request / appointment / inquiry id
+  rating     Int
+  body       String?
+  reply      String?
+  createdAt  DateTime      @default(now())
+  @@unique([reviewerId, context, contextRef]) // one review per interaction
+  @@index([subjectId])
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  actorType String // ADMIN | SYSTEM | USER
+  actorId   String // pseudonymous id; no personal data
+  action    String
+  entity    String
+  entityId  String
+  before    Json? // no personal data in payloads
+  after     Json?
+  prevHash  String
+  hash      String // tamper-evident chain
+  createdAt DateTime @default(now())
+  @@index([entity, entityId])
+  @@index([actorId, createdAt])
+}
+
+model FeatureFlag {
+  key       String   @id
+  enabled   Boolean  @default(false)
+  config    Json?
+  countryId String?
+  updatedBy String
+  updatedAt DateTime @updatedAt
+}
+
+model ExchangeRate {
+  id            String   @id @default(uuid())
+  base          Currency
+  quote         Currency
+  rate          Decimal  @db.Decimal(18, 6)
+  effectiveFrom DateTime
+  setBy         String
+  @@index([base, quote, effectiveFrom])
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  userId      String
+  amount      Decimal  @db.Decimal(14, 2)
+  currency    Currency
+  method      String // BANKAK | ...
+  reference   String
+  receiptKey  String? // private bucket
+  receiptHash String?
+  state       String // PENDING | APPROVED | REJECTED | REFUNDED
+  reason      String?
+  decidedBy   String?
+  createdAt   DateTime @default(now())
+  @@index([reference])
+  @@index([receiptHash])
+  @@index([state, createdAt])
+}
+
+model JobRun {
+  id          String   @id @default(uuid())
+  name        String
+  status      String // RUNNING | SUCCESS | FAILED
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  processed   Int      @default(0)
+  errors      Int      @default(0)
+  meta        Json?
+  @@index([name, startedAt])
+}
+
+model MediaAsset {
+  id          String   @id @default(uuid())
+  ownerId     String
+  bucket      String // public | private
+  key         String
+  mimeType    String
+  size        Int
+  width       Int?
+  height      Int?
+  phash       String?
+  gpsStripped Boolean  @default(false)
+  status      String   // PENDING | READY | FAILED
+  createdAt   DateTime @default(now())
+  @@index([ownerId])
+  @@index([phash])
+}
+
+// Remaining catalog entities (Report, ModerationAction, Appeal, Blacklist, VerificationRequest,
+// Notification, DeviceToken, Broadcast, Plan, Subscription, Promotion, CountrySetting,
+// Translation, Banner, ServiceProfile, ServiceSlot, ServiceAppointment, RentalRequest,
+// AccommodationInquiry, AvailabilityBlock, PropertyProject, EmployerProfile, CandidateDocument,
+// BusinessProfile, BusinessStaff, BusinessMetricDaily, SavedSearch, LedgerEntry, Receipt,
+// Invoice, CreditBalance, AnalyticsEvent, AdminSession, AdminRoleDef/Permission, LoginEvent,
+// FraudSignal, Blacklist, Badge, OtpCode, plus the Appendix B engine tables) follow the same
+// conventions and are added in their phase migrations (Phase 1+).
