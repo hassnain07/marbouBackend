@@ -2,14 +2,16 @@ version: "3.9"
 
 # ─── MARBOU local development stack ──────────────────────────────────────────
 # Services:  api · postgres (PostGIS + pg_trgm) · redis · minio · mailhog
-# Usage:
-#   cp .env.example .env          # fill in secrets
-#   docker compose up -d          # start everything
-#   docker compose logs -f api    # watch the API
+#
+# Full stack:
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# Infrastructure only (no api build — use `npm run dev` on the host):
+#   docker compose -f docker/docker-compose.yml up -d postgres redis minio minio-init mailhog
 #
 # Ports:
 #   api      3000  (REST + WebSocket)
-#   postgres 5432
+#   postgres 5433  (host) → 5432 (container)  [5433 to avoid clashing with local PG]
 #   redis    6379
 #   minio    9000 (S3 API)  9001 (web console)
 #   mailhog  1025 (SMTP)    8025 (web UI)
@@ -17,6 +19,11 @@ version: "3.9"
 
 services:
   # ── PostgreSQL with PostGIS (includes pg_trgm) ────────────────────────────
+  # Host port 5433 (not 5432) to avoid clashing with a developer's local
+  # PostgreSQL that commonly binds 5432. The API container connects to this
+  # service on the internal port 5432 via the `postgres` hostname (see the
+  # api service DATABASE_URL), so the host-side remap only affects host tooling
+  # (prisma migrate, npm run dev).
   postgres:
     image: postgis/postgis:16-3.4-alpine
     container_name: marbou_postgres
@@ -28,7 +35,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marbou -d marbou_db"]
       interval: 10s
@@ -53,8 +60,13 @@ services:
       retries: 5
 
   # ── MinIO (S3-compatible object storage) ──────────────────────────────────
+  # The official `minio/minio` image was removed from Docker Hub in September 2026;
+  # we use the Chainguard-maintained MinIO image instead (same MinIO server binary,
+  # RELEASE.2026-11-12). It bundles `mc` but no wget/curl, so the healthcheck uses
+  # `mc ready` against a temporary local alias. The health endpoint it effectively
+  # checks is http://localhost:9000/minio/health/live.
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     container_name: marbou_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -67,15 +79,20 @@ services:
       - "9000:9000"
       - "9001:9001"
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 15s
+      # `mc ready` exits 0 when the server is ready. $$ escapes to $ in the
+      # container shell so the root credentials are read from the env above.
+      test: ["CMD-SHELL", "mc alias set hc http://localhost:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD >/dev/null 2>&1; mc ready hc || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 10
+      start_period: 15s
 
   # ── MinIO bucket initialisation (runs once, creates buckets) ─────────────
+  # Uses the `kukuruser/mc` image — the last public `mc` build after MinIO
+  # removed `minio/mc` from Docker Hub in September 2026. It retries in a loop
+  # so it tolerates MinIO startup latency beyond the healthcheck start period.
   minio-init:
-    image: minio/mc:latest
+    image: kukuruser/mc:latest
     container_name: marbou_minio_init
     depends_on:
       minio:
@@ -83,7 +100,9 @@ services:
     restart: "no"
     entrypoint: >
       /bin/sh -c "
-        mc alias set local http://minio:9000 marbou marbou-secret &&
+        until mc alias set local http://minio:9000 marbou marbou-secret; do
+          echo 'Waiting for MinIO...'; sleep 2;
+        done &&
         mc mb --ignore-existing local/marbou-public &&
         mc mb --ignore-existing local/marbou-private &&
         mc anonymous set download local/marbou-public &&
@@ -91,6 +110,12 @@ services:
       "
 
   # ── Mailhog (SMTP dev server + web UI) ───────────────────────────────────
+  # `mailhog/mailhog` is a scratch image (single binary, no shell tools), so it
+  # cannot run a shell-based healthcheck. The API does not depend on MailHog
+  # being healthy — it is SMTP-only for local email capture, and the readiness
+  # probe checks DB/Redis/storage, not SMTP — so no healthcheck is defined here.
+  # MailHog's web UI (http://localhost:8025) and SMTP (localhost:1025) come up
+  # almost instantly with the container.
   mailhog:
     image: mailhog/mailhog:latest
     container_name: marbou_mailhog
@@ -98,13 +123,12 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8025/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
 
   # ── API ───────────────────────────────────────────────────────────────────
+  # NODE_ENV is set to 'development' (not 'production') so:
+  #   - DevOnlyGuard allows /dev/* routes for Postman testing
+  #   - INTEGRATIONS_MODE=mock loads mock adapters (email → mailhog, storage → minio)
+  #   - Zod env schema does not reject INTEGRATIONS_MODE=mock (only blocked in prod)
   api:
     build:
       context: ..
@@ -113,6 +137,7 @@ services:
     restart: unless-stopped
     env_file: ../.env
     environment:
+      # Service-network URLs — override whatever is in .env
       DATABASE_URL: postgresql://marbou:marbou@postgres:5432/marbou_db?schema=public
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
@@ -125,7 +150,10 @@ services:
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
       SMTP_FROM: "MARBOU <no-reply@marbou.test>"
-      NODE_ENV: production
+      # 'development' keeps /dev/* routes alive and mock adapters allowed.
+      # Change to 'staging' for a staging-like environment with real secrets.
+      NODE_ENV: development
+      INTEGRATIONS_MODE: mock
     ports:
       - "3000:3000"
     depends_on:
@@ -136,11 +164,11 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/health 2>&1 && exit 0 || exit 1"]
       interval: 20s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 40s
 
 volumes:
   postgres_data:

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "marbou-p00-collection",
     "name": "MARBOU API",
-    "description": "MARBOU multi-vertical marketplace API. One folder per phase. See postman/README.md for setup.",
+    "description": "MARBOU multi-vertical marketplace API. One folder per phase.\n\nP00 rate-limit tests: run the 'P00 Rate-limit — Call N of 6' requests in order (1→6). Calls 1-5 must return 200; call 6 must return 429 with Retry-After.\n\nSee postman/README.md for full setup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -12,10 +12,16 @@
         "type": "text/javascript",
         "exec": [
           "// Collection-level pre-request: add Accept-Language and x-device-id to every request.",
-          "pm.request.headers.upsert({ key: 'Accept-Language', value: pm.environment.get('lang') || 'en' });",
-          "pm.request.headers.upsert({ key: 'x-device-id',     value: pm.environment.get('deviceId') || 'postman-dev-001' });",
+          "// Requests that need to test the absence of x-device-id must set",
+          "// pm.variables.set('skipDeviceId', true) in their own pre-request script.",
+          "if (!pm.variables.get('skipDeviceId')) {",
+          "  pm.request.headers.upsert({ key: 'Accept-Language', value: pm.environment.get('lang') || 'en' });",
+          "  pm.request.headers.upsert({ key: 'x-device-id', value: pm.environment.get('deviceId') || 'postman-dev-001' });",
+          "} else {",
+          "  pm.request.headers.upsert({ key: 'Accept-Language', value: pm.environment.get('lang') || 'en' });",
+          "  pm.request.headers.remove('x-device-id');",
+          "}",
           "",
-          "// Auto-attach bearer token when userA_token is set.",
           "const token = pm.environment.get('userA_token');",
           "if (token && !pm.request.headers.has('Authorization')) {",
           "  pm.request.headers.upsert({ key: 'Authorization', value: 'Bearer ' + token });",
@@ -28,31 +34,29 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Collection-level test: assert the response envelope on JSON responses.",
           "const ct = pm.response.headers.get('Content-Type') || '';",
-          "if (ct.includes('application/json')) {",
-          "  const body = pm.response.json();",
-          "  // Swagger docs are not wrapped in the envelope — skip them.",
-          "  if (pm.request.url.toString().includes('/api/docs')) return;",
-          "  pm.test('Envelope: success field is a boolean', () => {",
-          "    pm.expect(typeof body.success).to.eql('boolean');",
+          "if (!ct.includes('application/json')) return;",
+          "const url = pm.request.url.toString();",
+          "if (url.includes('/api/docs')) return;",
+          "const body = pm.response.json();",
+          "pm.test('Envelope: success field is a boolean', () => {",
+          "  pm.expect(typeof body.success).to.eql('boolean');",
+          "});",
+          "if (body.success) {",
+          "  pm.test('Envelope: data and meta present', () => {",
+          "    pm.expect(body).to.have.property('data');",
+          "    pm.expect(body).to.have.property('meta');",
           "  });",
-          "  if (body.success) {",
-          "    pm.test('Envelope: success response has data and meta', () => {",
-          "      pm.expect(body).to.have.property('data');",
-          "      pm.expect(body).to.have.property('meta');",
-          "    });",
-          "    pm.test('Envelope: meta has requestId', () => {",
-          "      pm.expect(body.meta.requestId).to.be.a('string').and.not.empty;",
-          "    });",
-          "  } else {",
-          "    pm.test('Envelope: error response has error.code', () => {",
-          "      pm.expect(body.error.code).to.be.a('string').and.not.empty;",
-          "    });",
-          "    pm.test('Envelope: error response has error.message', () => {",
-          "      pm.expect(body.error.message).to.be.a('string').and.not.empty;",
-          "    });",
-          "  }",
+          "  pm.test('Envelope: meta.requestId is a non-empty string', () => {",
+          "    pm.expect(body.meta.requestId).to.be.a('string').and.not.empty;",
+          "  });",
+          "} else {",
+          "  pm.test('Envelope: error.code is a non-empty string', () => {",
+          "    pm.expect(body.error.code).to.be.a('string').and.not.empty;",
+          "  });",
+          "  pm.test('Envelope: error.message is a non-empty string', () => {",
+          "    pm.expect(body.error.message).to.be.a('string').and.not.empty;",
+          "  });",
           "}"
         ]
       }
@@ -61,7 +65,7 @@
   "item": [
     {
       "name": "P00 Foundation",
-      "description": "Phase 0 exit criteria tests. Run these after `docker compose up` to verify the foundation.",
+      "description": "Phase 0 exit-criteria tests. Run these after `docker compose -f docker/docker-compose.yml up -d` to verify the foundation.\n\nRate-limit sub-folder: run requests 1→6 in order (or use Collection Runner with 6 iterations on the single request variant).",
       "item": [
         {
           "name": "Health",
@@ -83,7 +87,7 @@
               }]
             },
             {
-              "name": "[P00][GET /health/ready] Readiness",
+              "name": "[P00][GET /health/ready] Readiness — all deps true",
               "request": {
                 "method": "GET",
                 "url": "{{baseUrl}}/health/ready"
@@ -91,20 +95,11 @@
               "event": [{
                 "listen": "test",
                 "script": { "type": "text/javascript", "exec": [
-                  "pm.test('Status 200 or 503', () => { pm.expect([200, 503]).to.include(pm.response.code); });",
+                  "pm.test('Status 200 (all deps healthy)', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
-                  "pm.test('data has db, redis, storage booleans', () => {",
-                  "  pm.expect(typeof b.data.db).to.eql('boolean');",
-                  "  pm.expect(typeof b.data.redis).to.eql('boolean');",
-                  "  pm.expect(typeof b.data.storage).to.eql('boolean');",
-                  "});",
-                  "if (pm.response.code === 200) {",
-                  "  pm.test('all deps true when 200', () => {",
-                  "    pm.expect(b.data.db).to.be.true;",
-                  "    pm.expect(b.data.redis).to.be.true;",
-                  "    pm.expect(b.data.storage).to.be.true;",
-                  "  });",
-                  "}"
+                  "pm.test('db: true', () => pm.expect(b.data.db).to.be.true);",
+                  "pm.test('redis: true', () => pm.expect(b.data.redis).to.be.true);",
+                  "pm.test('storage: true', () => pm.expect(b.data.storage).to.be.true);"
                 ]}
               }]
             }
@@ -114,7 +109,7 @@
           "name": "Swagger",
           "item": [
             {
-              "name": "[P00][GET /api/docs-json] OpenAPI JSON valid",
+              "name": "[P00][GET /api/docs-json] OpenAPI JSON valid + not enveloped",
               "request": {
                 "method": "GET",
                 "url": "{{baseUrl}}/api/docs-json"
@@ -126,7 +121,33 @@
                   "const b = pm.response.json();",
                   "pm.test('openapi field present', () => pm.expect(b.openapi).to.be.a('string'));",
                   "pm.test('info.title is MARBOU API', () => pm.expect(b.info.title).to.eql('MARBOU API'));",
-                  "pm.test('Not wrapped in envelope', () => pm.expect(b.success).to.be.undefined);"
+                  "pm.test('Not wrapped in envelope (no success field)', () => pm.expect(b.success).to.be.undefined);"
+                ]}
+              }]
+            }
+          ]
+        },
+        {
+          "name": "Compression",
+          "item": [
+            {
+              "name": "[P00] Gzip/Brotli on /api/docs-json",
+              "request": {
+                "method": "GET",
+                "url": "{{baseUrl}}/api/docs-json",
+                "header": [
+                  { "key": "Accept-Encoding", "value": "gzip, br" }
+                ]
+              },
+              "event": [{
+                "listen": "test",
+                "script": { "type": "text/javascript", "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Encoding is gzip or br', () => {",
+                  "  const enc = (pm.response.headers.get('Content-Encoding') || '').toLowerCase();",
+                  "  pm.expect(['gzip', 'br']).to.include(enc,",
+                  "    'Expected Content-Encoding to be gzip or br but got: ' + enc);",
+                  "});"
                 ]}
               }]
             }
@@ -148,7 +169,7 @@
                   "pm.test('Status 404', () => pm.response.to.have.status(404));",
                   "const b = pm.response.json();",
                   "pm.test('code is NOT_FOUND', () => pm.expect(b.error.code).to.eql('NOT_FOUND'));",
-                  "pm.test('message is English', () => pm.expect(b.error.message).to.eql('Resource not found'));",
+                  "pm.test('English message', () => pm.expect(b.error.message).to.eql('Resource not found'));",
                   "pm.test('traceId present', () => pm.expect(b.error.traceId).to.be.a('string').and.not.empty);"
                 ]}
               }]
@@ -165,7 +186,7 @@
                 "script": { "type": "text/javascript", "exec": [
                   "pm.test('Status 404', () => pm.response.to.have.status(404));",
                   "const b = pm.response.json();",
-                  "pm.test('message is Arabic', () => pm.expect(b.error.message).to.eql('المورد غير موجود'));"
+                  "pm.test('Arabic message', () => pm.expect(b.error.message).to.eql('المورد غير موجود'));"
                 ]}
               }]
             }
@@ -175,7 +196,7 @@
           "name": "Validation (422)",
           "item": [
             {
-              "name": "[P00][POST /dev/echo] Invalid body → 422",
+              "name": "[P00][POST /dev/echo] Invalid body → 422 with details[]",
               "request": {
                 "method": "POST",
                 "url": "{{baseUrl}}/dev/echo",
@@ -187,12 +208,9 @@
                 "script": { "type": "text/javascript", "exec": [
                   "pm.test('Status 422', () => pm.response.to.have.status(422));",
                   "const b = pm.response.json();",
-                  "pm.test('code is VALIDATION_FAILED', () => pm.expect(b.error.code).to.eql('VALIDATION_FAILED'));",
-                  "pm.test('details[] is non-empty array', () => {",
-                  "  pm.expect(Array.isArray(b.error.details)).to.be.true;",
-                  "  pm.expect(b.error.details.length).to.be.above(0);",
-                  "});",
-                  "pm.test('details[0].field is message', () => pm.expect(b.error.details[0].field).to.eql('message'));"
+                  "pm.test('code VALIDATION_FAILED', () => pm.expect(b.error.code).to.eql('VALIDATION_FAILED'));",
+                  "pm.test('details[] non-empty', () => { pm.expect(Array.isArray(b.error.details)).to.be.true; pm.expect(b.error.details.length).to.be.above(0); });",
+                  "pm.test('details[0].field = message', () => pm.expect(b.error.details[0].field).to.eql('message'));"
                 ]}
               }]
             },
@@ -215,56 +233,103 @@
           ]
         },
         {
-          "name": "Rate limiting",
+          "name": "Rate limiting — 6 requests in order",
+          "description": "Run these 6 requests in order. Calls 1-5 → 200. Call 6 → 429 with Retry-After.\n\nAll use the same x-device-id ('rl-test-device') so the counter accumulates. The collection pre-request script is bypassed for the no-device test variant below.",
           "item": [
             {
-              "name": "[P00][GET /dev/rate-test] Calls 1-5 → 200",
-              "request": {
-                "method": "GET",
-                "url": "{{baseUrl}}/dev/rate-test"
-              },
-              "event": [{
-                "listen": "test",
-                "script": { "type": "text/javascript", "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('X-RateLimit-Limit header present', () => pm.expect(pm.response.headers.get('x-ratelimit-limit')).to.be.a('string'));"
-                ]}
-              }]
-            },
-            {
-              "name": "[P00][GET /dev/rate-test] 6th call → 429",
-              "description": "Run the previous request 5 times first with the same x-device-id; this 6th call should return 429.",
-              "request": {
-                "method": "GET",
-                "url": "{{baseUrl}}/dev/rate-test"
-              },
-              "event": [{
-                "listen": "test",
-                "script": { "type": "text/javascript", "exec": [
-                  "pm.test('Status 429 or 200 (200 when Redis down/degraded)', () => {",
-                  "  pm.expect([200, 429]).to.include(pm.response.code);",
-                  "});",
-                  "if (pm.response.code === 429) {",
-                  "  const b = pm.response.json();",
-                  "  pm.test('code is RATE_LIMITED', () => pm.expect(b.error.code).to.eql('RATE_LIMITED'));",
-                  "  pm.test('Retry-After header present', () => pm.expect(pm.response.headers.get('retry-after')).to.be.a('string').and.not.empty);",
-                  "}"
-                ]}
-              }]
-            },
-            {
-              "name": "[P00][GET /dev/rate-test] Without x-device-id → keys by IP only",
+              "name": "[P00][GET /dev/rate-test] Call 1 of 6 → 200",
               "request": {
                 "method": "GET",
                 "url": "{{baseUrl}}/dev/rate-test",
-                "header": [{ "key": "x-device-id", "value": "", "disabled": true }]
+                "header": [{ "key": "x-device-id", "value": "rl-test-device", "description": "Fixed id so the counter accumulates across all 6 calls" }]
               },
+              "event": [{
+                "listen": "prerequest",
+                "script": { "type": "text/javascript", "exec": ["pm.variables.set('skipDeviceId', false);"] }
+              }, {
+                "listen": "test",
+                "script": { "type": "text/javascript", "exec": [
+                  "pm.test('Call 1: status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('X-RateLimit-Limit header present', () => pm.expect(pm.response.headers.get('x-ratelimit-limit')).to.be.a('string'));",
+                  "pm.test('X-RateLimit-Remaining present', () => pm.expect(pm.response.headers.get('x-ratelimit-remaining')).to.be.a('string'));",
+                  "pm.test('Retry-After NOT set on success', () => pm.expect(pm.response.headers.get('retry-after')).to.be.null);"
+                ]}
+              }]
+            },
+            {
+              "name": "[P00][GET /dev/rate-test] Call 2 of 6 → 200",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/rate-test", "header": [{ "key": "x-device-id", "value": "rl-test-device" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Call 2: status 200', () => pm.response.to.have.status(200));"] } }]
+            },
+            {
+              "name": "[P00][GET /dev/rate-test] Call 3 of 6 → 200",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/rate-test", "header": [{ "key": "x-device-id", "value": "rl-test-device" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Call 3: status 200', () => pm.response.to.have.status(200));"] } }]
+            },
+            {
+              "name": "[P00][GET /dev/rate-test] Call 4 of 6 → 200",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/rate-test", "header": [{ "key": "x-device-id", "value": "rl-test-device" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Call 4: status 200', () => pm.response.to.have.status(200));"] } }]
+            },
+            {
+              "name": "[P00][GET /dev/rate-test] Call 5 of 6 → 200",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/rate-test", "header": [{ "key": "x-device-id", "value": "rl-test-device" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Call 5: status 200', () => pm.response.to.have.status(200));"] } }]
+            },
+            {
+              "name": "[P00][GET /dev/rate-test] Call 6 of 6 → 429 RATE_LIMITED",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/rate-test", "header": [{ "key": "x-device-id", "value": "rl-test-device" }] },
               "event": [{
                 "listen": "test",
                 "script": { "type": "text/javascript", "exec": [
-                  "pm.test('Status 200 or 429', () => pm.expect([200, 429]).to.include(pm.response.code));"
+                  "pm.test('Call 6: status 429', () => pm.response.to.have.status(429));",
+                  "const b = pm.response.json();",
+                  "pm.test('code is RATE_LIMITED', () => pm.expect(b.error.code).to.eql('RATE_LIMITED'));",
+                  "pm.test('Retry-After header present and numeric', () => {",
+                  "  const ra = pm.response.headers.get('retry-after') || pm.response.headers.get('Retry-After') || '';",
+                  "  pm.expect(ra).to.match(/^\\d+$/, 'Retry-After should be a numeric string of seconds');",
+                  "});"
                 ]}
               }]
+            },
+            {
+              "name": "[P00][GET /dev/rate-test] No x-device-id → still 429 on 6th (IP-keyed)",
+              "description": "Bypasses the collection pre-request so x-device-id is NOT added. After calling this 6+ times, the IP-based counter should trigger 429.",
+              "request": {
+                "method": "GET",
+                "url": "{{baseUrl}}/dev/rate-test"
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// Remove x-device-id so the guard keys by IP only.",
+                      "pm.request.headers.remove('x-device-id');",
+                      "pm.variables.set('skipDeviceId', true);"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": { "type": "text/javascript", "exec": [
+                    "pm.test('Status 200 or 429 (200 if window not exhausted yet)', () => {",
+                    "  pm.expect([200, 429]).to.include(pm.response.code);",
+                    "});",
+                    "pm.test('No x-device-id header sent (verify in request)', () => {",
+                    "  const sent = pm.request.headers.get('x-device-id');",
+                    "  pm.expect(sent).to.be.null;",
+                    "});",
+                    "if (pm.response.code === 429) {",
+                    "  pm.test('Retry-After present on 429', () => {",
+                    "    const ra = pm.response.headers.get('retry-after') || '';",
+                    "    pm.expect(ra).to.match(/^\\d+$/);",
+                    "  });",
+                    "}"
+                  ]}
+                }
+              ]
             }
           ]
         },
@@ -282,52 +347,26 @@
               "event": [{
                 "listen": "test",
                 "script": { "type": "text/javascript", "exec": [
-                  "pm.test('201 or 503 (503 when Redis down)', () => pm.expect([201, 503]).to.include(pm.response.code));",
-                  "if (pm.response.code === 201) {",
-                  "  pm.test('data.enqueued is true', () => pm.expect(pm.response.json().data.enqueued).to.be.true);",
-                  "}",
-                  "if (pm.response.code === 503) {",
-                  "  pm.test('code is SERVICE_UNAVAILABLE', () => pm.expect(pm.response.json().error.code).to.eql('SERVICE_UNAVAILABLE'));",
-                  "}"
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('data.enqueued is true', () => pm.expect(pm.response.json().data.enqueued).to.be.true);"
                 ]}
               }]
             },
             {
-              "name": "[P00][GET /dev/jobs/runs] Latest echo job runs",
+              "name": "[P00][GET /dev/jobs/runs] Latest echo JobRun rows",
               "request": {
                 "method": "GET",
-                "url": {
-                  "raw": "{{baseUrl}}/dev/jobs/runs?name=echo",
-                  "query": [{ "key": "name", "value": "echo" }]
-                }
+                "url": { "raw": "{{baseUrl}}/dev/jobs/runs?name=echo", "query": [{ "key": "name", "value": "echo" }] }
               },
               "event": [{
                 "listen": "test",
                 "script": { "type": "text/javascript", "exec": [
                   "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('data.runs is an array', () => pm.expect(Array.isArray(pm.response.json().data.runs)).to.be.true);"
-                ]}
-              }]
-            }
-          ]
-        },
-        {
-          "name": "Compression",
-          "item": [
-            {
-              "name": "[P00] Gzip / Brotli compression header",
-              "request": {
-                "method": "GET",
-                "url": "{{baseUrl}}/api/docs-json",
-                "header": [{ "key": "Accept-Encoding", "value": "gzip, br" }]
-              },
-              "event": [{
-                "listen": "test",
-                "script": { "type": "text/javascript", "exec": [
-                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
-                  "pm.test('Content-Encoding is gzip or br (or absent for small payloads)', () => {",
-                  "  const enc = pm.response.headers.get('content-encoding') || '';",
-                  "  pm.expect(['gzip', 'br', '']).to.include(enc);",
+                  "const b = pm.response.json();",
+                  "pm.test('data.runs is an array', () => pm.expect(Array.isArray(b.data.runs)).to.be.true);",
+                  "pm.test('At least one SUCCESS run', () => {",
+                  "  const successes = b.data.runs.filter(r => r.status === 'SUCCESS');",
+                  "  pm.expect(successes.length).to.be.above(0, 'No SUCCESS JobRun found — did the echo job complete?');",
                   "});"
                 ]}
               }]
@@ -338,7 +377,7 @@
     },
     {
       "name": "ZZ Smoke",
-      "description": "Happy-path smoke run covering all phases. Expand and populate as phases are completed.",
+      "description": "Happy-path smoke run across all phases. Populate as phases are completed.",
       "item": []
     }
   ]

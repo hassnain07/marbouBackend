@@ -6,7 +6,7 @@
 const defaults: Record<string, string> = {
   NODE_ENV: 'test',
   PORT: '3001',
-  DATABASE_URL: 'postgresql://marbou:marbou@localhost:5432/marbou_test?schema=public',
+  DATABASE_URL: 'postgresql://marbou:marbou@localhost:5433/marbou_test?schema=public',
   REDIS_URL: 'redis://localhost:6379',
   JWT_ACCESS_SECRET: 'test-access-secret-at-least-16-chars',
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-16-chars',

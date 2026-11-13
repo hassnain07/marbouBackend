@@ -21,6 +21,10 @@ cp .env.example .env
 # 3. Start services (PostgreSQL/PostGIS, Redis, MinIO, Mailhog)
 docker compose -f docker/docker-compose.yml up -d
 
+# 3b. (Alternative) Start ONLY the infrastructure (no api container) and run
+#     the API on the host with `npm run dev` — useful when iterating on code:
+#     docker compose -f docker/docker-compose.yml up -d postgres redis minio minio-init mailhog
+
 # 4. Apply migrations + seed
 npx prisma migrate deploy
 npm run prisma:seed
@@ -30,6 +34,11 @@ npm run dev
 ```
 
 The API is now running at **http://localhost:3000**.
+
+> **Postgres host port is `5433`** (mapped to the container's 5432) so it does not
+> clash with a locally-installed PostgreSQL that binds 5432. The `api` container
+> connects to Postgres on the internal port 5432 via the `postgres` hostname, so
+> the host-side remap only affects host tooling (`prisma migrate`, `npm run dev`).
 
 ---
 
