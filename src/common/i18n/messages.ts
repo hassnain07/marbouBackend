@@ -79,6 +79,9 @@ const CATALOG: Catalog = {
   ADM_LAST_SUPER_ADMIN: { ar: 'لا يمكن إزالة آخر مدير عام', en: 'Cannot remove the last Super Admin' },
   ADM_TOTP_REQUIRED: { ar: 'مطلوب تأكيد بخطوتين', en: 'Two-factor authentication is required' },
   SYS_AUDIT_CHAIN_BROKEN: { ar: 'سلسلة التدقيق معطوبة', en: 'Audit chain verification failed' },
+  DEFAULTS_INVALID_TYPE: { ar: 'نوع القيمة غير صالح', en: 'Invalid value type for this setting' },
+  DEFAULTS_VALUE_OUT_OF_RANGE: { ar: 'القيمة خارج النطاق المسموح', en: 'Value is out of the allowed range' },
+  CONFIG_INVALID: { ar: 'بيانات الإعداد غير صالحة', en: 'Invalid configuration data' },
 };
 
 /** Resolve a localized message for a code. Falls back to English, then the code itself. */

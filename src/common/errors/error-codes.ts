@@ -76,6 +76,11 @@ export const ErrorCodes = {
   ADM_LAST_SUPER_ADMIN: 'ADM_LAST_SUPER_ADMIN',
   ADM_TOTP_REQUIRED: 'ADM_TOTP_REQUIRED',
   SYS_AUDIT_CHAIN_BROKEN: 'SYS_AUDIT_CHAIN_BROKEN',
+
+  // ── Phase 1 defaults / config ──
+  DEFAULTS_INVALID_TYPE: 'DEFAULTS_INVALID_TYPE',
+  DEFAULTS_VALUE_OUT_OF_RANGE: 'DEFAULTS_VALUE_OUT_OF_RANGE',
+  CONFIG_INVALID: 'CONFIG_INVALID',
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

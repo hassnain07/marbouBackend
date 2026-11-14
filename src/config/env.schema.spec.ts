@@ -8,6 +8,7 @@ const base = {
   JWT_REFRESH_SECRET: 'refresh-secret-at-least-16-chars-long',
   ADMIN_JWT_SECRET: 'admin-secret-at-least-16-chars-long',
   ADMIN_TOTP_ENC_KEY: 'totp-key-must-be-at-least-32-characters',
+  ADMIN_BOOTSTRAP_KEY: 'test-bootstrap-key-min',
 };
 
 describe('envSchema', () => {
@@ -65,6 +66,11 @@ describe('envSchema', () => {
       DEV_EXPOSE_OTP: 'false',
     });
     expect(result.success).toBe(true);
+  });
+
+  it('requires ADMIN_BOOTSTRAP_KEY of at least 16 chars', () => {
+    const result = envSchema.safeParse({ ...base, ADMIN_BOOTSTRAP_KEY: 'short' });
+    expect(result.success).toBe(false);
   });
 
   it('splits CORS_ORIGINS on comma', () => {

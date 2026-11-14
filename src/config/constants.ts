@@ -11,6 +11,7 @@ export const HEADERS = {
   DEVICE_ID: 'x-device-id',
   IDEMPOTENCY_KEY: 'idempotency-key',
   ACCEPT_LANGUAGE: 'accept-language',
+  ADMIN_BOOTSTRAP_KEY: 'x-admin-bootstrap-key',
 } as const;
 
 /** Supported locales (§10.1). Arabic is the default/fallback. */

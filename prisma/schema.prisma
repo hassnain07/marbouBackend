@@ -546,13 +546,54 @@ model AuditLog {
   @@index([actorId, createdAt])
 }
 
+// FeatureFlag — DB source of truth, Redis-cached (≤ 60 s propagation, §9).
+// `countryOverrides` is a JSON map { "SD": { enabled: true } } so a single flag
+// row can carry per-country overrides while keeping `key` as the PK.
 model FeatureFlag {
-  key       String   @id
-  enabled   Boolean  @default(false)
+  key             String   @id
+  enabled         Boolean  @default(false)
+  config          Json? // engine-specific config (e.g. contact.reveal_policy policy)
+  countryOverrides Json? // { "<countryCode>": { enabled: boolean, config?: object } }
+  description     String?
+  updatedBy       String
+  updatedAt      DateTime @updatedAt
+  history         FeatureFlagHistory[]
+
+  @@index([enabled])
+}
+
+// Append-only change history for each flag toggle (queryable per flag). Every
+// change ALSO writes a global AuditLog entry with before/after (TRS-12, ADM-09).
+model FeatureFlagHistory {
+  id        BigInt   @id @default(autoincrement())
+  flagKey   String
+  flag      FeatureFlag @relation(fields: [flagKey], references: [key])
+  enabled   Boolean
   config    Json?
-  countryId String?
+  changedBy String
+  changedAt DateTime @default(now())
+  @@index([flagKey, changedAt])
+}
+
+// RemoteConfig — versioned JSON config blobs (§7.1): app versions, maintenance
+// mode, media limits. Version bumps on every change so clients can detect drift.
+model RemoteConfig {
+  key       String   @id // 'appVersions' | 'maintenance' | 'mediaLimits'
+  value     Json
+  version   Int      @default(1)
   updatedBy String
   updatedAt DateTime @updatedAt
+}
+
+// DefaultSetting — the Appendix C configurable-defaults register (ADM-23). Each
+// row is one threshold/cap/weight, typed so the console can validate edits.
+model DefaultSetting {
+  key         String   @id // e.g. 'listing.rate.perHour'
+  value       Json // typed value (number|boolean|string|object)
+  type        String // 'number' | 'boolean' | 'string' | 'object'
+  description String?
+  updatedBy   String
+  updatedAt   DateTime @updatedAt
 }
 
 model ExchangeRate {

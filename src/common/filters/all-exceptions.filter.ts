@@ -111,7 +111,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
         success: false,
         error: {
           code: ErrorCodes.INTERNAL_ERROR,
-          message: localizeError(ErrorCodes.INTERNAL_ERROR, lang),
+          // Surface the actual error message in non-production so e2e tests
+          // and developers can diagnose issues without reading server logs.
+          message:
+            process.env.NODE_ENV !== 'production' && exception instanceof Error
+              ? exception.message
+              : localizeError(ErrorCodes.INTERNAL_ERROR, lang),
           traceId,
         },
       },

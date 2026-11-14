@@ -1,27 +1,28 @@
 /**
- * Prisma seed runner — idempotent skeleton (Phase 0).
- * Run via:  npm run prisma:seed
+ * MARBOU seed runner — idempotent, upsert-based.
+ * Run: npm run prisma:seed  (or npx prisma db seed)
  *
- * Each seeder is imported and run in phase order. Seeds that
- * already exist are skipped (upsert / createIfNotExists pattern).
- * Phase 1+ adds: flags.seed, defaults.seed, geography.seed,
- *                categories/*.seed, translations.seed, admin.seed,
- *                demo.seed (dev-only).
+ * Phase 0: skeleton
+ * Phase 1: admin user, feature flags, remote config defaults, Appendix C defaults
  */
-
+import 'dotenv/config'; // load .env before any imports that read process.env
 import { PrismaClient } from '@prisma/client';
+import { seedAdmin } from './admin.seed';
+import { seedFlags } from './flags.seed';
+import { seedDefaults } from './defaults.seed';
+import { seedRemoteConfig } from './remote-config.seed';
 
 const prisma = new PrismaClient();
 
 async function main(): Promise<void> {
   console.log('▶ Starting MARBOU seed runner…');
 
-  // ── Phase 0: no rows to seed yet. ──────────────────────────────────────────
-  // The seed file is here so `npm run prisma:seed` runs cleanly from a fresh
-  // clone and can be verified in CI. Actual seeders are imported in later
-  // phases and placed in prisma/seed/<phase>/<name>.seed.ts.
+  await seedAdmin(prisma);
+  await seedRemoteConfig(prisma);
+  await seedFlags(prisma);
+  await seedDefaults(prisma);
 
-  console.log('✔ Seed complete (Phase 0 — nothing to seed yet)');
+  console.log('✔ Seed complete');
 }
 
 main()

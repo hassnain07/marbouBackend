@@ -28,6 +28,13 @@ const envSchema = z
     ADMIN_JWT_REFRESH_TTL: z.string().default('12h'),
     ADMIN_TOTP_ENC_KEY: z.string().min(32, 'ADMIN_TOTP_ENC_KEY must be at least 32 chars'),
 
+    // Phase 1: temporary admin bootstrap (replaced by real 2FA admin auth in Phase 2).
+    ADMIN_BOOTSTRAP_KEY: z
+      .string()
+      .min(16, 'ADMIN_BOOTSTRAP_KEY must be at least 16 chars (temporary dev admin access)'),
+    ADMIN_SEED_EMAIL: z.string().email().default('admin@marbou.test'),
+    ADMIN_SEED_PASSWORD: z.string().min(8, 'ADMIN_SEED_PASSWORD must be at least 8 chars').default('ChangeMe!2026'),
+
     S3_ENDPOINT: z.string().default('http://localhost:9000'),
     S3_REGION: z.string().default('us-east-1'),
     S3_PUBLIC_BUCKET: z.string().default('marbou-public'),

@@ -24,6 +24,10 @@ export async function createApp(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   app.useLogger(app.get(Logger));
 
+  // Disable Express's automatic weak ETag so our ETagInterceptor is the only
+  // one setting it (otherwise Express's W/"..." overrides our strong SHA-256 ETag).
+  (app.getHttpAdapter().getInstance() as any).set('etag', false);
+
   // API controllers carry the `api/v1/` prefix in their @Controller() path (see
   // API_PREFIX). Health and dev helpers stay at the root. We deliberately do NOT
   // use setGlobalPrefix: with a global prefix Nest mounts the not-found handler
