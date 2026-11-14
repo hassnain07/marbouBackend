@@ -49,10 +49,23 @@ export class FeatureFlagsService {
     return cached.enabled;
   }
 
-  /** Client-safe public subset (enabled-only keys, no internal config). */
+  /** Client-safe public subset: only flags where clientVisible=true (item 7).
+   *  Internal/admin flags (e.g. moderation.delayed_visibility) are excluded.
+   *  Client-visible flags:
+   *    otp.email/sms/whatsapp — which auth channels are active
+   *    payments.* — whether payment UI is shown
+   *    media.video_uploads — whether video upload is offered
+   *    contact.reveal_policy — reveal mode setting
+   *    ENABLE_MONETIZATION + monetization.* — which engines are live
+   *    wholesale.enabled, hotel.reservations — vertical feature gates
+   *  Excluded (clientVisible=false):
+   *    moderation.delayed_visibility — internal moderation setting
+   */
   async getPublicFlags(): Promise<Record<string, boolean>> {
     const all = await this.findAll();
-    return Object.fromEntries(all.map((f) => [f.key, f.enabled]));
+    return Object.fromEntries(
+      all.filter((f) => f.clientVisible !== false).map((f) => [f.key, f.enabled]),
+    );
   }
 
   /** Flag change history. */

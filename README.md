@@ -29,6 +29,9 @@ docker compose -f docker/docker-compose.yml up -d
 npx prisma migrate deploy
 npm run prisma:seed
 
+# 4b. Re-seeding is safe and idempotent: it never overwrites admin-changed flag
+#     `enabled`/`config` or admin-changed defaults.
+
 # 5. Start the development server (watch mode)
 npm run dev
 ```
@@ -136,13 +139,53 @@ See `.env.example` for the full list. Key required variables:
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | User JWT signing (≥ 16 chars) |
 | `ADMIN_JWT_SECRET` | Admin JWT signing (≥ 16 chars) |
 | `ADMIN_TOTP_ENC_KEY` | AES key for TOTP secret encryption (≥ 32 chars) |
+| `ADMIN_BOOTSTRAP_KEY` | Temporary dev admin access key (≥ 16 chars; forbidden in production, replaced by TOTP in Phase 2) |
+| `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` | First Super Admin credentials (seeded by `prisma:seed`) |
 | `INTEGRATIONS_MODE` | `mock` (dev/test) or `live` (production) |
+
+---
+
+## Phase 1 endpoints
+
+All admin routes require header `x-admin-bootstrap-key: <ADMIN_BOOTSTRAP_KEY>` (temporary Phase 1 auth; Phase 2 adds TOTP admin auth).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/config` | Client config (versions, maintenance, media limits, flags) — ETag + 304 |
+| GET | `/api/v1/flags` | Public, client-safe flag values (excludes internal flags) |
+| GET | `/api/v1/admin/flags` | All flags (admin) |
+| PATCH | `/api/v1/admin/flags/:key` | Toggle a flag (audit + history; last-OTP-channel enforced) |
+| GET | `/api/v1/admin/flags/:key/history` | Flag change history |
+| GET | `/api/v1/admin/media-limits` | Media limits config |
+| PATCH | `/api/v1/admin/media-limits` | Update media limits (audited) |
+| PATCH | `/api/v1/admin/app-versions` | Update min app versions (audited) |
+| PATCH | `/api/v1/admin/maintenance` | Toggle maintenance mode (audited) |
+| GET | `/api/v1/admin/defaults` | All Appendix C configurable defaults |
+| PATCH | `/api/v1/admin/defaults` | Update a default (type + range validated; audited) |
+| GET | `/api/v1/admin/audit-logs` | Cursor-paginated audit log (filter by entity/entityId/actor/action/date) |
+| GET | `/api/v1/admin/audit-logs/verify-chain` | Verify the hash-chained audit log |
+| GET | `/dev/flag-test` | Dev-only route guarded by `@RequiresFlag('ENABLE_MONETIZATION')` |
 
 ---
 
 ## Migrations
 
 Migrations live in `prisma/migrations/`. Hand-written SQL migrations (PostGIS extensions, GIN indexes, partitioning, expression indexes) follow the same naming convention and are kept in the same history. See `docs/schema-decisions.md` for the Phase 0 schema fixes.
+
+---
+
+## Helper scripts (`scripts/`)
+
+| Script | Purpose |
+|---|---|
+| `docker-up-infra.ps1` | Start Postgres + Redis containers |
+| `docker-up-all-infra.ps1` | Start Postgres + Redis + MinIO + Mailhog |
+| `docker-ps.ps1` | List running MARBOU containers |
+| `docker-psql.ps1` | Open a psql session in the Postgres container |
+| `flush-redis.ps1` | Flush the Redis cache (use after manual DB edits to refresh cached flags/config/defaults) |
+| `start-dev.ps1` | Start the compiled API on port 3099 (for Newman testing) |
+
+These are Windows PowerShell helpers (Docker Desktop is not on the default PATH on this machine; the scripts use the full Docker path).
 
 ---
 

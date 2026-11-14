@@ -265,6 +265,11 @@ export const APPENDIX_C_DEFAULTS: Record<string, DefaultEntry> = {
     description:
       'Maximum days to deliver a data export (target < 24 h). Appendix C.',
   },
+  'account.export.targetHours': {
+    value: 24,
+    type: 'number',
+    description: 'Target hours for data export delivery (Appendix C: "target under 24 hours").',
+  },
 
   // ── Registration drop-off (OD-01 trigger) ────────────────────────────
   'auth.otp.dropOffTriggerPercent': {

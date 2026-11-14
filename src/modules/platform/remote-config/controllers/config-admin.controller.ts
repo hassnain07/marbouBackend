@@ -9,6 +9,7 @@ import { zodPipe } from '../../../../common/pipes/zod-validation.pipe';
 import { patchMaintenanceSchema } from '../dto/patch-maintenance.dto';
 import { patchAppVersionsSchema } from '../dto/patch-app-versions.dto';
 import { patchMediaLimitsSchema } from '../dto/patch-media-limits.dto';
+import { Audit } from '../../../../common/decorators/audit.decorator';
 
 /** TODO(phase-2): replace AdminBootstrapGuard with AdminJwtGuard + AdminRoleGuard(SA). */
 @Controller('api/v1/admin')
@@ -32,6 +33,7 @@ export class ConfigAdminController {
   }
 
   @Patch('app-versions')
+  @Audit({ action: 'remoteConfig.set.appVersions', entity: 'AppVersionConfig' })
   async patchAppVersions(
     @Body(zodPipe(patchAppVersionsSchema)) body: ReturnType<typeof patchAppVersionsSchema.parse>,
     @Req() req: Request & { admin: BootstrapAdmin },

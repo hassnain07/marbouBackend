@@ -7,13 +7,18 @@ import {
 import { map, type Observable } from 'rxjs';
 import { PAGINATION_MARKER, type SuccessEnvelope } from '../envelope';
 import { getRequestId } from '../request-context';
+import { ETAG_304_SENTINEL } from './etag.interceptor';
 
 /**
  * ResponseEnvelopeInterceptor — wraps every successful response in the standard
  * envelope (architecture §5.2):
  *   { success: true, data, meta: { requestId, ...pagination } }
- * A controller may return either a plain payload (→ data) or a `paginated(...)`
- * helper result (→ data + pagination meta). Streaming/binary responses bypass.
+ *
+ * Special cases bypassed:
+ *  - Swagger docs (/api/docs) — raw OpenAPI JSON.
+ *  - file/stream responses (Content-Disposition: attachment).
+ *  - ETAG_304_SENTINEL — the ETagInterceptor has already set 304 on the response;
+ *    we end the connection with an empty body instead of wrapping.
  */
 @Injectable()
 export class ResponseEnvelopeInterceptor implements NestInterceptor {
@@ -38,6 +43,16 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       map((payload) => {
+        // ETagInterceptor has set 304 on the response — end with empty body.
+        if (payload === ETAG_304_SENTINEL) {
+          if (!res.headersSent) {
+            res.end();
+          }
+          return undefined;
+        }
+
+        if (res.headersSent) return payload;
+
         if (
           payload &&
           typeof payload === 'object' &&

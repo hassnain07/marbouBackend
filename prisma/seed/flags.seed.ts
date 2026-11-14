@@ -21,6 +21,8 @@ interface FlagDef {
   enabled: boolean;
   description: string;
   config?: unknown;
+  /** Whether this flag appears in GET /api/v1/flags (client-safe subset). */
+  clientVisible?: boolean;
 }
 
 export async function seedFlags(prisma: PrismaClient): Promise<void> {
@@ -72,6 +74,7 @@ export async function seedFlags(prisma: PrismaClient): Promise<void> {
     {
       key: 'moderation.delayed_visibility',
       enabled: false,
+      clientVisible: false,
       description: 'Delayed-visibility mode (TRS-15): hold listings for scan/review before publish. OFF by default everywhere.',
     },
 
@@ -113,13 +116,14 @@ export async function seedFlags(prisma: PrismaClient): Promise<void> {
         enabled: flag.enabled,
         config: flag.config ?? null,
         description: flag.description,
+        clientVisible: flag.clientVisible ?? true,
         updatedBy: 'seed',
       },
-      // On re-seed: update description/config but DO NOT change `enabled` so
-      // admin changes are preserved.
+      // On re-seed: sync description + clientVisible (metadata, safe to refresh)
+      // but NEVER touch `enabled` or `config` so admin changes are preserved (item 6).
       update: {
         description: flag.description,
-        config: flag.config ?? null,
+        clientVisible: flag.clientVisible ?? true,
         updatedBy: 'seed',
       },
     });

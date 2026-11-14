@@ -328,16 +328,82 @@ describe('Phase 1 — Platform Services (e2e)', () => {
 
   // ── @RequiresFlag guard ───────────────────────────────────────────────────
 
-  describe('@RequiresFlag via /dev route', () => {
-    it('flagged route works when flag is ON', async () => {
-      // otp.email is ON; we use the dev echo as an unguarded proxy; instead,
-      // test indirectly: a guarded route returns FEATURE_DISABLED when flag is OFF.
-      // We'll flip ENABLE_MONETIZATION OFF (it already is) and verify it.
+  describe('@RequiresFlag via /dev/flag-test', () => {
+    it('returns 404 FEATURE_DISABLED when the flag is OFF (default state)', async () => {
+      // Ensure ENABLE_MONETIZATION is OFF.
       await admin(http.patch('/api/v1/admin/flags/ENABLE_MONETIZATION').send({ enabled: false }));
-      // The flag is now OFF — the guard would return 404 FEATURE_DISABLED.
-      // We can't test it without a real flagged route in this phase; this is
-      // covered by the FlagGuard unit test. Mark as passing.
-      expect(true).toBe(true);
+      const res = await http.get('/dev/flag-test');
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('FEATURE_DISABLED');
+    });
+
+    it('returns 404 FEATURE_DISABLED localised for Arabic', async () => {
+      const res = await http.get('/dev/flag-test').set('Accept-Language', 'ar');
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('FEATURE_DISABLED');
+      expect(res.body.error.message).toBe('هذه الميزة غير مفعّلة');
+    });
+
+    it('returns 200 when the flag is turned ON', async () => {
+      await admin(http.patch('/api/v1/admin/flags/ENABLE_MONETIZATION').send({ enabled: true }));
+      const res = await http.get('/dev/flag-test');
+      expect(res.status).toBe(200);
+      expect(res.body.data.flagEnabled).toBe(true);
+    });
+
+    it('returns 404 again after turning the flag OFF', async () => {
+      await admin(http.patch('/api/v1/admin/flags/ENABLE_MONETIZATION').send({ enabled: false }));
+      const res = await http.get('/dev/flag-test');
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe('FEATURE_DISABLED');
+    });
+  });
+
+  // ── Audit null handling (item 3) ─────────────────────────────────────────
+
+  describe('Audit null handling', () => {
+    it('record() with no before/after then verifyChain() → valid:true', async () => {
+      // Trigger an audit record by patching a default with a sentinel value.
+      await admin(http.patch('/api/v1/admin/defaults').send({ key: 'listing.photos.max', value: 10 }));
+      const res = await admin(http.get('/api/v1/admin/audit-logs/verify-chain'));
+      expect(res.status).toBe(200);
+      expect(res.body.data.valid).toBe(true);
+      expect(res.body.data.checked).toBeGreaterThan(0);
+    });
+  });
+
+  // ── Defaults validation: quality weights sum (item 5) ────────────────────
+
+  describe('Defaults validation', () => {
+    it('rejects quality weight change that breaks the sum=100 rule', async () => {
+      const res = await admin(
+        http.patch('/api/v1/admin/defaults').send({ key: 'quality.weight.titleDescription', value: 26 }),
+      );
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('DEFAULTS_VALUE_OUT_OF_RANGE');
+      expect(res.body.error.details[0].issue).toMatch(/sum/i);
+    });
+
+    it('rejects a negative cap value', async () => {
+      const res = await admin(
+        http.patch('/api/v1/admin/defaults').send({ key: 'listing.cap.individual', value: -5 }),
+      );
+      expect(res.status).toBe(422);
+      expect(res.body.error.code).toBe('DEFAULTS_VALUE_OUT_OF_RANGE');
+    });
+  });
+
+  // ── GET /flags excludes internal flags (item 7) ───────────────────────────
+
+  describe('Public flags visibility (item 7)', () => {
+    it('GET /api/v1/flags excludes internal flags (moderation.delayed_visibility)', async () => {
+      const res = await http.get('/api/v1/flags');
+      expect(res.status).toBe(200);
+      // moderation.delayed_visibility is internal (clientVisible=false) → excluded.
+      expect('moderation.delayed_visibility' in res.body.data).toBe(false);
+      // Client-visible flags still present (flat keys with dots in the name).
+      expect('otp.email' in res.body.data).toBe(true);
+      expect('ENABLE_MONETIZATION' in res.body.data).toBe(true);
     });
   });
 });

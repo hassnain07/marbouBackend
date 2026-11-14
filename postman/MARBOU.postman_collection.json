@@ -376,6 +376,307 @@
       ]
     },
     {
+      "name": "P01 Platform",
+      "description": "Phase 1: Feature flags, remote config, defaults register, audit log.\nAll admin requests use header x-admin-bootstrap-key: {{adminBootstrapKey}}.\nMutating requests revert state so the folder is re-runnable.",
+      "item": [
+        {
+          "name": "Config",
+          "item": [
+            {
+              "name": "[P01][GET /api/v1/config] Returns config + ETag",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/config" },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "const b = pm.response.json();",
+                "pm.test('has appVersions', () => pm.expect(b.data).to.have.property('appVersions'));",
+                "pm.test('has maintenance', () => pm.expect(b.data).to.have.property('maintenance'));",
+                "pm.test('has mediaLimits', () => pm.expect(b.data).to.have.property('mediaLimits'));",
+                "pm.test('has activeFlags', () => pm.expect(b.data).to.have.property('activeFlags'));",
+                "pm.test('ETag present', () => pm.expect(pm.response.headers.get('etag')).to.match(/^\"[0-9a-f]{64}\"$/));",
+                "pm.environment.set('configEtag', pm.response.headers.get('etag'));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /api/v1/config] 304 on If-None-Match",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/config", "header": [{ "key": "If-None-Match", "value": "{{configEtag}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('304 Not Modified', () => pm.response.to.have.status(304));",
+                "pm.test('empty body', () => pm.expect(pm.response.text()).to.equal(''));"
+              ]}}]
+            }
+          ]
+        },
+        {
+          "name": "Flags",
+          "item": [
+            {
+              "name": "[P01][GET /api/v1/flags] Public flags list",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/flags" },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('otp.email is boolean', () => pm.expect(typeof pm.response.json().data['otp.email']).to.eql('boolean'));",
+                "pm.test('internal flag excluded', () => pm.expect('moderation.delayed_visibility' in pm.response.json().data).to.be.false);"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /admin/flags] Admin list (with bootstrap key)",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/flags", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('returns array', () => pm.expect(Array.isArray(pm.response.json().data)).to.be.true);",
+                "pm.test('has ENABLE_MONETIZATION', () => pm.expect(pm.response.json().data.some(f => f.key === 'ENABLE_MONETIZATION')).to.be.true);"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/flags/ENABLE_MONETIZATION] Toggle ON then revert",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/flags/ENABLE_MONETIZATION", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"enabled\": true}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('enabled is true', () => pm.expect(pm.response.json().data.enabled).to.be.true);"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/flags/ENABLE_MONETIZATION] Revert to OFF",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/flags/ENABLE_MONETIZATION", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"enabled\": false}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 reverted', () => pm.response.to.have.status(200));",
+                "pm.test('enabled is false', () => pm.expect(pm.response.json().data.enabled).to.be.false);"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /admin/flags/ENABLE_MONETIZATION/history] Flag history",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/flags/ENABLE_MONETIZATION/history", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('non-empty history', () => pm.expect(pm.response.json().data.length).to.be.above(0));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/flags/otp.email] Last OTP channel refusal 422",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/flags/otp.email", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"enabled\": false}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('422 refused', () => pm.response.to.have.status(422));",
+                "pm.test('code AUTH_OTP_LAST_CHANNEL', () => pm.expect(pm.response.json().error.code).to.eql('AUTH_OTP_LAST_CHANNEL'));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /admin/flags] Missing bootstrap key 401",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/flags" },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401', () => pm.response.to.have.status(401));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /admin/flags] Wrong bootstrap key 401",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/flags", "header": [{ "key": "x-admin-bootstrap-key", "value": "wrong-key" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401', () => pm.response.to.have.status(401));"
+              ]}}]
+            }
+          ]
+        },
+        {
+          "name": "Dev flag-test (FlagGuard)",
+          "item": [
+            {
+              "name": "[P01][GET /dev/flag-test] Flag OFF → 404 FEATURE_DISABLED",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/flag-test" },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404', () => pm.response.to.have.status(404));",
+                "pm.test('code FEATURE_DISABLED', () => pm.expect(pm.response.json().error.code).to.eql('FEATURE_DISABLED'));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/flags/ENABLE_MONETIZATION] Enable ON",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/flags/ENABLE_MONETIZATION", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"enabled\": true}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 enabled', () => pm.response.to.have.status(200));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /dev/flag-test] Flag ON → 200",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/flag-test" },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('flagEnabled true', () => pm.expect(pm.response.json().data.flagEnabled).to.be.true);"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/flags/ENABLE_MONETIZATION] Revert OFF",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/flags/ENABLE_MONETIZATION", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"enabled\": false}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 reverted', () => pm.response.to.have.status(200));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /dev/flag-test] Flag OFF again → 404",
+              "request": { "method": "GET", "url": "{{baseUrl}}/dev/flag-test" },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404', () => pm.response.to.have.status(404));",
+                "pm.test('code FEATURE_DISABLED', () => pm.expect(pm.response.json().error.code).to.eql('FEATURE_DISABLED'));"
+              ]}}]
+            }
+          ]
+        },
+        {
+          "name": "Media limits",
+          "item": [
+            {
+              "name": "[P01][GET /admin/media-limits] Current limits",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/media-limits", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('photos=10', () => pm.expect(pm.response.json().data.maxPhotosPerListing).to.eql(10));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/media-limits] Set photos=12 then revert",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/media-limits", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"maxPhotosPerListing\": 12}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('photos=12', () => pm.expect(pm.response.json().data.maxPhotosPerListing).to.eql(12));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/media-limits] Revert to 10",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/media-limits", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"maxPhotosPerListing\": 10}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 reverted', () => pm.response.to.have.status(200));"
+              ]}}]
+            }
+          ]
+        },
+        {
+          "name": "App versions",
+          "item": [
+            {
+              "name": "[P01][PATCH /admin/app-versions] Update then revert",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/app-versions", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"ios\":{\"minimum\":\"1.0.1\",\"latest\":\"1.0.1\"},\"android\":{\"minimum\":\"1.0.1\",\"latest\":\"1.0.1\"}}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('ios.minimum=1.0.1', () => pm.expect(pm.response.json().data.ios.minimum).to.eql('1.0.1'));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/app-versions] Revert to 1.0.0",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/app-versions", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"ios\":{\"minimum\":\"1.0.0\",\"latest\":\"1.0.0\"},\"android\":{\"minimum\":\"1.0.0\",\"latest\":\"1.0.0\"}}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 reverted', () => pm.response.to.have.status(200));"
+              ]}}]
+            }
+          ]
+        },
+        {
+          "name": "Maintenance",
+          "item": [
+            {
+              "name": "[P01][PATCH /admin/maintenance] Enable with EN banner",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/maintenance", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"enabled\": true, \"bannerAr\": \"صيانة مجدولة\", \"bannerEn\": \"Scheduled maintenance\"}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('enabled true', () => pm.expect(pm.response.json().data.enabled).to.be.true);"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /api/v1/config] Maintenance banner in EN",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/config", "header": [{ "key": "Accept-Language", "value": "en" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('bannerEn = Scheduled maintenance', () => pm.expect(pm.response.json().data.maintenance.bannerEn).to.eql('Scheduled maintenance'));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /api/v1/config] Maintenance banner in AR",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/config", "header": [{ "key": "Accept-Language", "value": "ar" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('bannerAr = صيانة مجدولة', () => pm.expect(pm.response.json().data.maintenance.bannerAr).to.eql('صيانة مجدولة'));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/maintenance] Revert to OFF",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/maintenance", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"enabled\": false, \"bannerAr\": \"الموقع تحت الصيانة، يرجى المحاولة لاحقاً\", \"bannerEn\": \"The service is under maintenance, please try again later\"}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 reverted', () => pm.response.to.have.status(200));",
+                "pm.test('enabled false', () => pm.expect(pm.response.json().data.enabled).to.be.false);"
+              ]}}]
+            }
+          ]
+        },
+        {
+          "name": "Defaults",
+          "item": [
+            {
+              "name": "[P01][GET /admin/defaults] List all defaults",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/defaults", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('>= 43 defaults', () => pm.expect(pm.response.json().data.length).to.be.at.least(43));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/defaults] Set photos=12 then revert",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/defaults", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"key\": \"listing.photos.max\", \"value\": 12}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('value=12', () => pm.expect(pm.response.json().data.value).to.eql(12));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /admin/audit-logs] Check audit entry for default change",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/audit-logs?entity=DefaultSetting&entityId=listing.photos.max", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "const logs = pm.response.json().data;",
+                "pm.test('has audit entry', () => pm.expect(logs.length).to.be.above(0));",
+                "pm.test('before=10', () => pm.expect(logs[0].before).to.eql(10));",
+                "pm.test('after=12', () => pm.expect(logs[0].after).to.eql(12));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/defaults] Revert photos to 10",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/defaults", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"key\": \"listing.photos.max\", \"value\": 10}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 reverted', () => pm.response.to.have.status(200));",
+                "pm.test('value=10', () => pm.expect(pm.response.json().data.value).to.eql(10));"
+              ]}}]
+            },
+            {
+              "name": "[P01][PATCH /admin/defaults] Invalid type 422",
+              "request": { "method": "PATCH", "url": "{{baseUrl}}/api/v1/admin/defaults", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}"}, { "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"key\": \"listing.photos.max\", \"value\": \"ten\"}" } },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('422', () => pm.response.to.have.status(422));",
+                "pm.test('code DEFAULTS_INVALID_TYPE', () => pm.expect(pm.response.json().error.code).to.eql('DEFAULTS_INVALID_TYPE'));"
+              ]}}]
+            }
+          ]
+        },
+        {
+          "name": "Audit logs",
+          "item": [
+            {
+              "name": "[P01][GET /admin/audit-logs] List with filter",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/audit-logs?entity=DefaultSetting", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('array', () => pm.expect(Array.isArray(pm.response.json().data)).to.be.true);",
+                "pm.test('all DefaultSetting', () => pm.response.json().data.forEach(r => pm.expect(r.entity).to.eql('DefaultSetting')));"
+              ]}}]
+            },
+            {
+              "name": "[P01][GET /admin/audit-logs/verify-chain] Chain valid",
+              "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/admin/audit-logs/verify-chain", "header": [{ "key": "x-admin-bootstrap-key", "value": "{{adminBootstrapKey}}" }] },
+              "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "pm.test('valid=true', () => pm.expect(pm.response.json().data.valid).to.be.true);",
+                "pm.test('checked>0', () => pm.expect(pm.response.json().data.checked).to.be.above(0));"
+              ]}}]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "ZZ Smoke",
       "description": "Happy-path smoke run across all phases. Populate as phases are completed.",
       "item": []

@@ -1,6 +1,6 @@
 import { of } from 'rxjs';
 import { lastValueFrom } from 'rxjs';
-import { ETagInterceptor } from './etag.interceptor';
+import { ETagInterceptor, ETAG_304_SENTINEL } from './etag.interceptor';
 import { sha256 } from '../utils/crypto';
 
 function makeCtx(ifNoneMatch?: string) {
@@ -40,14 +40,15 @@ describe('ETagInterceptor', () => {
     expect(result).toEqual(payload);
   });
 
-  it('returns 304 and undefined when If-None-Match matches', async () => {
+  it('sets status 304 and returns the ETAG_304 sentinel when If-None-Match matches', async () => {
     const body = JSON.stringify(payload);
     const etag = `"${sha256(body)}"`;
     const ctx = makeCtx(etag);
     const result = await lastValueFrom(interceptor.intercept(ctx, { handle: () => of(payload) }));
     expect(ctx._res._status).toBe(304);
-    expect(ctx._res.end).toHaveBeenCalled();
-    expect(result).toBeUndefined();
+    // The ETag interceptor returns the sentinel; the ResponseEnvelopeInterceptor
+    // is responsible for calling res.end() when it sees this sentinel.
+    expect(result).toBe(ETAG_304_SENTINEL);
   });
 
   it('returns 200 when If-None-Match does not match', async () => {

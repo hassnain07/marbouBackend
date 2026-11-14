@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { DevOnlyGuard } from '../../../common/guards/dev-only.guard';
 import { RateLimit } from '../../../common/decorators/rate-limit.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
+import { RequiresFlag } from '../../../common/decorators/requires-flag.decorator';
 import { zodPipe } from '../../../common/pipes/zod-validation.pipe';
 import { QueuesService } from '../../../queues/queues.service';
 import { QueueName } from '../../../queues/queue-names';
@@ -17,6 +18,17 @@ export class DevController {
     private readonly queues: QueuesService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Dev flag-test route: requires ENABLE_MONETIZATION flag to be ON.
+   * Used in e2e tests to verify FlagGuard works end-to-end.
+   * Returns 404 FEATURE_DISABLED when flag is OFF, 200 when ON.
+   */
+  @Get('flag-test')
+  @RequiresFlag('ENABLE_MONETIZATION')
+  flagTest(): { flagEnabled: true } {
+    return { flagEnabled: true };
+  }
 
   /** Echoes a validated body. Invalid body → 422 with details[] (Postman P00). */
   @Post('echo')

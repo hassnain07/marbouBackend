@@ -20,6 +20,7 @@ export class FeatureFlagsRepository {
     config?: unknown;
     countryOverrides?: unknown;
     description?: string;
+    clientVisible?: boolean;
     updatedBy: string;
   }): Promise<FeatureFlag> {
     const val: Prisma.FeatureFlagUpdateInput = {
@@ -27,6 +28,7 @@ export class FeatureFlagsRepository {
       config: (data.config ?? null) as Prisma.InputJsonValue,
       countryOverrides: (data.countryOverrides ?? null) as Prisma.InputJsonValue,
       description: data.description,
+      clientVisible: data.clientVisible ?? true,
       updatedBy: data.updatedBy,
     };
     return this.prisma.featureFlag.upsert({

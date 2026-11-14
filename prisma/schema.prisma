@@ -549,12 +549,16 @@ model AuditLog {
 // FeatureFlag — DB source of truth, Redis-cached (≤ 60 s propagation, §9).
 // `countryOverrides` is a JSON map { "SD": { enabled: true } } so a single flag
 // row can carry per-country overrides while keeping `key` as the PK.
+// `clientVisible` marks flags that should appear in the public GET /api/v1/flags
+// response; internal/admin-only flags (like moderation.delayed_visibility) are
+// excluded from the client-safe subset.
 model FeatureFlag {
   key             String   @id
   enabled         Boolean  @default(false)
   config          Json? // engine-specific config (e.g. contact.reveal_policy policy)
   countryOverrides Json? // { "<countryCode>": { enabled: boolean, config?: object } }
   description     String?
+  clientVisible   Boolean  @default(true) // false = internal only, excluded from GET /flags
   updatedBy       String
   updatedAt      DateTime @updatedAt
   history         FeatureFlagHistory[]

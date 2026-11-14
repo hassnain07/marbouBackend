@@ -24,6 +24,26 @@ export interface VerifyResult {
 }
 
 /**
+ * Normalise a before/after value for both Prisma write and canonical-JSON hash.
+ *
+ * Rules:
+ *  - undefined / null  → null in the canonical payload AND Prisma.JsonNull for
+ *    the DB write (Prisma requires explicit JsonNull to store SQL NULL in a
+ *    nullable Json? column; passing JS null raises a Prisma type error).
+ *  - everything else   → passed through as-is.
+ *
+ * The canonical payload uses `null` (not Prisma.JsonNull) so verifyChain produces
+ * the same hash whether the rows were written via record() or replayed later.
+ */
+function toJsonValue(v: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  return v == null ? Prisma.JsonNull : (v as Prisma.InputJsonValue);
+}
+
+function toCanonical(v: unknown): unknown {
+  return v == null ? null : v;
+}
+
+/**
  * AuditService — append-only, hash-chained, tamper-evident audit log
  * (architecture §5.9, TRS-12, SYS-10, ADM-19).
  *
@@ -39,11 +59,10 @@ export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
   async record(input: RecordInput): Promise<AuditLogRow> {
-    // The whole chain-append is one serialised transaction.
     const created = await this.prisma.$transaction(async (tx) => {
       // Serialise: block other writers until this transaction commits.
-      // We use $executeRaw (not $queryRaw) because pg_advisory_xact_lock returns
-      // void and $queryRaw fails to deserialize a void column.
+      // Uses $executeRaw because pg_advisory_xact_lock returns void; $queryRaw
+      // fails to deserialize a void column.
       await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(${AUDIT_LOCK_KEY})`);
 
       const last = await tx.$queryRaw<{ hash: string }[]>(
@@ -52,16 +71,16 @@ export class AuditService {
       const prevHash = last[0]?.hash ?? AUDIT_GENESIS_HASH;
 
       const createdAt = new Date();
-      // The hash covers everything EXCEPT the row's own autoincrement id and the
-      // hash itself. before/after must contain IDs only (no PII).
+      // Canonical payload: null (not Prisma.JsonNull) for absent before/after so
+      // verifyChain reproduces the same hash regardless of write path.
       const entryPayload = {
         actorType: input.actorType,
         actorId: input.actorId,
         action: input.action,
         entity: input.entity,
         entityId: input.entityId,
-        before: input.before ?? null,
-        after: input.after ?? null,
+        before: toCanonical(input.before),
+        after: toCanonical(input.after),
         createdAt: createdAt.toISOString(),
       };
       const hash = sha256(prevHash + canonicalJson(entryPayload));
@@ -73,8 +92,9 @@ export class AuditService {
           action: input.action,
           entity: input.entity,
           entityId: input.entityId,
-          before: (input.before ?? null) as never,
-          after: (input.after ?? null) as never,
+          // Use Prisma.JsonNull to write SQL NULL into Json? columns.
+          before: toJsonValue(input.before),
+          after: toJsonValue(input.after),
           prevHash,
           hash,
           createdAt,
@@ -86,32 +106,46 @@ export class AuditService {
   }
 
   /**
-   * Verify the chain: recompute every row's hash from its prevHash + canonical
-   * payload and compare to the stored hash. Returns the first broken row id (if
-   * any). Used by GET /admin/audit-logs/verify-chain (ADM-19).
+   * Verify the chain in batches of BATCH_SIZE rows to avoid loading the whole
+   * table into memory (item 8).
    */
   async verifyChain(): Promise<VerifyResult> {
-    const rows = await this.prisma.auditLog.findMany({ orderBy: { id: 'asc' } });
+    const BATCH_SIZE = 1000;
     let prevHash = AUDIT_GENESIS_HASH;
     let checked = 0;
-    for (const row of rows) {
-      const entryPayload = {
-        actorType: row.actorType,
-        actorId: row.actorId,
-        action: row.action,
-        entity: row.entity,
-        entityId: row.entityId,
-        before: row.before,
-        after: row.after,
-        createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
-      };
-      const expected = sha256(prevHash + canonicalJson(entryPayload));
-      checked += 1;
-      if (expected !== row.hash) {
-        this.logger.error(`Audit chain broken at id=${row.id.toString()}`);
-        return { valid: false, checked, brokenAtId: row.id.toString() };
+    let lastId: bigint | undefined;
+
+    while (true) {
+      const rows = await this.prisma.auditLog.findMany({
+        orderBy: { id: 'asc' },
+        take: BATCH_SIZE,
+        ...(lastId !== undefined ? { cursor: { id: lastId }, skip: 1 } : {}),
+      });
+      if (rows.length === 0) break;
+
+      for (const row of rows) {
+        const entryPayload = {
+          actorType: row.actorType,
+          actorId: row.actorId,
+          action: row.action,
+          entity: row.entity,
+          entityId: row.entityId,
+          // toCanonical: DB stores SQL NULL as Prisma null; normalise to JS null
+          // to match the canonical form used at write time.
+          before: row.before ?? null,
+          after: row.after ?? null,
+          createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+        };
+        const expected = sha256(prevHash + canonicalJson(entryPayload));
+        checked += 1;
+        if (expected !== row.hash) {
+          this.logger.error(`Audit chain broken at id=${row.id.toString()}`);
+          return { valid: false, checked, brokenAtId: row.id.toString() };
+        }
+        prevHash = row.hash;
       }
-      prevHash = row.hash;
+      lastId = rows[rows.length - 1].id;
+      if (rows.length < BATCH_SIZE) break;
     }
     return { valid: true, checked };
   }

@@ -5,6 +5,7 @@ import { RedisService } from '../../../redis/redis.service';
 import { AuditService } from '../audit/audit.service';
 import { AuditActorType } from '../audit/audit.constants';
 import { APPENDIX_C_DEFAULTS } from './defaults.constants';
+import { validateDefaultValue } from './defaults.validators';
 import { AppError } from '../../../common/errors/app-error';
 import { ErrorCodes } from '../../../common/errors/error-codes';
 
@@ -43,15 +44,21 @@ export class DefaultsService {
     if (!existing && !def) {
       throw AppError.notFound(ErrorCodes.NOT_FOUND, `Default '${key}' not found`);
     }
-    const expectedType = def?.type ?? existing?.type;
-    if (expectedType && typeof newValue !== expectedType && expectedType !== 'object') {
-      throw AppError.unprocessable(ErrorCodes.DEFAULTS_INVALID_TYPE, [
-        {
-          field: 'value',
-          issue: `Expected type '${expectedType}' but got '${typeof newValue}'`,
-        },
-      ]);
+
+    // Load all current values for cross-key validators (e.g. quality weights sum).
+    const allRows = await this.prisma.defaultSetting.findMany();
+    const allCurrentValues = new Map<string, unknown>(
+      allRows.map((r) => [r.key, r.value]),
+    );
+    // Merge in-memory defaults for keys not yet persisted.
+    for (const [k, entry] of Object.entries(APPENDIX_C_DEFAULTS)) {
+      if (!allCurrentValues.has(k)) allCurrentValues.set(k, entry.value);
     }
+
+    // Type + range validation (item 5).
+    validateDefaultValue(key, newValue, def, allCurrentValues);
+
+    const expectedType = def?.type ?? existing?.type;
     const before = existing?.value ?? def?.value ?? null;
     const updated = await this.prisma.defaultSetting.upsert({
       where: { key },

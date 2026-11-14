@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ─── MARBOU local development stack ──────────────────────────────────────────
 # Services:  api · postgres (PostGIS + pg_trgm) · redis · minio · mailhog
 #

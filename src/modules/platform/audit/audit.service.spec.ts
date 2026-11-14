@@ -20,7 +20,16 @@ function buildService() {
     }),
     auditLog: {
       create: jest.fn().mockImplementation(async ({ data }: any) => {
-        const row = { ...data, id: nextId };
+        // Simulate the DB round-trip: Prisma.JsonNull (a symbol) is stored as SQL
+        // NULL and read back as JS null. So convert JsonNull → null in the mock row
+        // so verifyChain reproduces the same canonical payload as the write path.
+        const Prisma = require('@prisma/client').Prisma;
+        const row = {
+          ...data,
+          before: data.before === Prisma.JsonNull ? null : data.before,
+          after: data.after === Prisma.JsonNull ? null : data.after,
+          id: nextId,
+        };
         rows.push(row);
         nextId = nextId + BigInt(1);
         return row;

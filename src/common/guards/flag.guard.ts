@@ -8,8 +8,12 @@ import { ErrorCodes } from '../errors/error-codes';
  * FlagGuard — when a route is decorated with @RequiresFlag('key') and that flag
  * is OFF in FeatureFlagsService, respond 404 FEATURE_DISABLED (architecture §5.7).
  *
- * Uses ModuleRef.get with { strict: false } to avoid importing FeatureFlagsService
- * directly into common/, keeping the dependency direction clean.
+ * Uses ModuleRef.get with { strict: false } to resolve FeatureFlagsService from
+ * the application module graph without directly importing it into common/, keeping
+ * the dependency direction clean (common never imports modules/).
+ *
+ * Registered as an APP_GUARD in AppModule so it runs on every route after
+ * RateLimitGuard. Routes without @RequiresFlag pass through immediately.
  */
 @Injectable()
 export class FlagGuard implements CanActivate {
@@ -25,8 +29,9 @@ export class FlagGuard implements CanActivate {
     );
     if (!flagKey) return true;
 
-    // Lazily resolve FeatureFlagsService from the module graph. This breaks
-    // the potential circular dependency while still being type-safe at runtime.
+    // Lazily resolve FeatureFlagsService. By the time guards run all modules
+    // are fully initialised, so strict:false is safe and no circular dependency
+    // is introduced at the type level.
     const { FeatureFlagsService } = await import(
       '../../modules/platform/feature-flags/feature-flags.service'
     );

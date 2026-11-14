@@ -18,7 +18,9 @@ import { LocaleMiddleware } from './common/middleware/locale.middleware';
 import { DeviceIdMiddleware } from './common/middleware/device-id.middleware';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
+import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
+import { FlagGuard } from './common/guards/flag.guard';
 
 import { PlatformModule } from './modules/platform/platform.module';
 
@@ -50,7 +52,9 @@ import { PlatformModule } from './modules/platform/platform.module';
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     { provide: APP_GUARD, useClass: RateLimitGuard },
+    { provide: APP_GUARD, useClass: FlagGuard },
   ],
 })
 export class AppModule implements NestModule {
