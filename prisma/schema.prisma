@@ -194,16 +194,71 @@ model Session {
 }
 
 model AdminUser {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  passwordHash String
-  fullName     String
-  role         AdminRole
-  totpSecret   String // encrypted; 2FA mandatory
-  ipAllowlist  String[]
-  isActive     Boolean   @default(true)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id               String    @id @default(uuid())
+  email            String    @unique
+  passwordHash     String
+  fullName         String
+  role             AdminRole
+  // Encrypted TOTP secret (AES-256-GCM: iv(12)+tag(16)+ciphertext, base64). NULL until
+  // 2fa/setup stores it (not yet enabled); plaintext never persisted. (NFR-SEC-07)
+  totpSecret       String?
+  // When set, TOTP enrollment is complete and mandatory. NULL = not enrolled yet.
+  totpEnabledAt    DateTime?
+  // Highest TOTP time-step counter already accepted — rejects replay of a used code.
+  lastTotpStep     BigInt?
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  // Empty array = no restriction; otherwise login/authenticated requests must come
+  // from one of these IPs. (ADM-18)
+  ipAllowList      String[]
+  lastLoginAt      DateTime?
+  lastLoginIp      String?
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  sessions         AdminSession[]
+  loginLogs        AdminLoginLog[]
+
+  @@index([email])
+}
+
+// AdminSession — refresh-token family with rotation + reuse detection (AUTH-20).
+// Only the SHA-256 hash of the opaque refresh token is stored, never the raw token.
+model AdminSession {
+  id             String    @id @default(uuid())
+  adminId        String
+  admin          AdminUser @relation(fields: [adminId], references: [id])
+  familyId       String // refresh-token family; reuse of a rotated token revokes the family
+  refreshTokenHash String // SHA-256 hex of the opaque refresh token
+  ip             String?
+  userAgent      String?
+  createdAt       DateTime  @default(now())
+  lastSeenAt      DateTime  @default(now())
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  revokedReason   String?
+  replacedById    String?
+
+  @@index([adminId])
+  @@index([familyId])
+  @@index([refreshTokenHash])
+}
+
+// AdminLoginLog — every login attempt outcome (AUTH-20, ADM-18). For unknown emails
+// we store a hash, never the raw email, so the log reveals no PII.
+model AdminLoginLog {
+  id        BigInt   @id @default(autoincrement())
+  adminId   String? // null when the email was unknown
+  admin     AdminUser? @relation(fields: [adminId], references: [id])
+  emailHash String? // SHA-256 of the attempted email (null when admin matched)
+  outcome   String // SUCCESS | BAD_PASSWORD | BAD_TOTP | LOCKED | IP_BLOCKED | INACTIVE | TOTP_SETUP_REQUIRED
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([adminId, createdAt])
+  @@index([outcome, createdAt])
 }
 
 // ---------- Geography ----------

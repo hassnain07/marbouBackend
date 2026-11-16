@@ -23,6 +23,7 @@ import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { FlagGuard } from './common/guards/flag.guard';
 
 import { PlatformModule } from './modules/platform/platform.module';
+import { AdminAuthModule } from './modules/admin-auth/admin-auth.module';
 
 /**
  * AppModule — the modular monolith root (architecture §3). Global modules
@@ -48,6 +49,7 @@ import { PlatformModule } from './modules/platform/platform.module';
     RedisModule,
     QueuesModule,
     PlatformModule,
+    AdminAuthModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

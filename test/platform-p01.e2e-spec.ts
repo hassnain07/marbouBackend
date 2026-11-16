@@ -1,8 +1,9 @@
 /**
  * Phase 1 Platform e2e tests — Flags, RemoteConfig, Defaults, Audit Log.
  *
- * Runs against a real Postgres + Redis (the Docker infra stack). The bootstrap
- * admin guard is exercised with the ADMIN_BOOTSTRAP_KEY from setup-env.ts.
+ * Runs against a real Postgres + Redis (the Docker infra stack). Phase 2 admin
+ * auth (login + 2FA + access token) is exercised via the dev SA account seeded
+ * with a deterministic TOTP secret.
  *
  * Tests are ordered and run serially. Each mutating test reverts its change at
  * the end so the suite is re-runnable. The DB must have migrations + seed applied.
@@ -10,24 +11,58 @@
 import { type INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { createApp } from '../src/bootstrap';
+import { hotp, currentTotpStep } from '../src/common/utils/totp';
+import { DEV_TOTP_SECRETS } from '../src/modules/admin-auth/dev-totp-secrets';
 
-const KEY = process.env.ADMIN_BOOTSTRAP_KEY ?? 'dev-bootstrap-key-change-me-min16';
-const admin = (agent: ReturnType<typeof request>) =>
-  agent.set('x-admin-bootstrap-key', KEY);
+const ADMIN_EMAIL = 'sa@dev.marbou.test';
+const ADMIN_PASSWORD = process.env.ADMIN_SEED_PASSWORD ?? 'ChangeMe!2026#';
+const ADMIN_TOTP_SECRET = DEV_TOTP_SECRETS.superadmin;
+
+let ACCESS_TOKEN: string | null = null;
+
+/** Helper to get a fresh admin access token (cached for the suite). */
+async function getAdminToken(agent: ReturnType<typeof request>): Promise<string> {
+  if (ACCESS_TOKEN) return ACCESS_TOKEN;
+  // Step 1: login with password → mfaToken
+  const login = await agent.post('/api/v1/admin/auth/login').send({
+    email: ADMIN_EMAIL,
+    password: ADMIN_PASSWORD,
+  });
+  if (login.status !== 200 && login.status !== 201) {
+    throw new Error(`Login failed with status ${login.status}: ${JSON.stringify(login.body)}`);
+  }
+  const { mfaToken } = login.body.data;
+  // Step 2: verify TOTP → accessToken
+  const code = hotp(ADMIN_TOTP_SECRET, currentTotpStep());
+  const verify = await agent.post('/api/v1/admin/auth/2fa/verify').send({
+    mfaToken,
+    code,
+  });
+  if (verify.status !== 200 && verify.status !== 201) {
+    throw new Error(`2FA verify failed with status ${verify.status}: ${JSON.stringify(verify.body)}`);
+  }
+  ACCESS_TOKEN = verify.body.data.accessToken;
+  return ACCESS_TOKEN;
+}
 
 describe('Phase 1 — Platform Services (e2e)', () => {
   let app: INestApplication;
   let http: ReturnType<typeof request>;
+  let adminToken: string;
 
   beforeAll(async () => {
     app = await createApp();
     await app.init();
     http = request(app.getHttpServer());
+    // Get admin access token once for the entire suite
+    adminToken = await getAdminToken(http);
   }, 20000);
 
   afterAll(async () => {
     await app.close();
   }, 15000);
+
+  const admin = (req: request.Test) => req.set('Authorization', `Bearer ${adminToken}`);
 
   // ── GET /api/v1/config — public + ETag ───────────────────────────────────
 
@@ -77,7 +112,7 @@ describe('Phase 1 — Platform Services (e2e)', () => {
   // ── Admin flag endpoints ──────────────────────────────────────────────────
 
   describe('Admin flags', () => {
-    it('GET /api/v1/admin/flags requires bootstrap key', async () => {
+    it('GET /api/v1/admin/flags requires admin JWT', async () => {
       const res = await http.get('/api/v1/admin/flags');
       expect(res.status).toBe(401);
       expect(res.body.error.code).toBe('UNAUTHORIZED');
@@ -314,14 +349,16 @@ describe('Phase 1 — Platform Services (e2e)', () => {
 
   // ── Missing bootstrap key / wrong key → 401 ──────────────────────────────
 
-  describe('Bootstrap key guard', () => {
-    it('missing key → 401', async () => {
+  // ── Admin JWT guard (missing/wrong token → 401) ──────────────────────────
+
+  describe('AdminJwtGuard', () => {
+    it('missing token → 401', async () => {
       const res = await http.get('/api/v1/admin/flags');
       expect(res.status).toBe(401);
     });
 
-    it('wrong key → 401', async () => {
-      const res = await http.get('/api/v1/admin/flags').set('x-admin-bootstrap-key', 'wrong-key');
+    it('wrong token → 401', async () => {
+      const res = await http.get('/api/v1/admin/flags').set('Authorization', 'Bearer invalid-token');
       expect(res.status).toBe(401);
     });
   });

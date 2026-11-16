@@ -1,22 +1,23 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AuditService } from '../audit.service';
 import { AuditRepository } from '../audit.repository';
-import { AdminBootstrapGuard } from '../../../../common/guards/admin-bootstrap.guard';
+import { AdminJwtGuard } from '../../../../common/guards/admin-jwt.guard';
+import { AdminPermission } from '../../../../common/decorators/admin-permission.decorator';
 import { zodPipe } from '../../../../common/pipes/zod-validation.pipe';
 import { auditFilterSchema } from '../dto/audit-filter.dto';
 import { paginated } from '../../../../common/envelope';
 
-/** TODO(phase-2): replace AdminBootstrapGuard with AdminJwtGuard + AdminRoleGuard(FIN, SA). */
+/** Phase 2: AdminJwtGuard + @AdminPermission('audit.read') — FIN + SA only. */
 @Controller('api/v1/admin/audit-logs')
-@UseGuards(AdminBootstrapGuard)
+@UseGuards(AdminJwtGuard)
 export class AuditAdminController {
   constructor(
     private readonly audit: AuditService,
     private readonly repo: AuditRepository,
   ) {}
 
-  /** GET /api/v1/admin/audit-logs — cursor-paginated, filterable. */
   @Get()
+  @AdminPermission('audit.read')
   async list(@Query(zodPipe(auditFilterSchema)) q: ReturnType<typeof auditFilterSchema.parse>) {
     const filter = {
       entity: q.entity,
@@ -27,13 +28,12 @@ export class AuditAdminController {
       toDate: q.toDate ? new Date(q.toDate) : undefined,
     };
     const { items, nextCursor } = await this.repo.list(filter, q.limit, q.cursor);
-    // Serialise BigInt ids to strings for JSON safety.
     const rows = items.map((r) => ({ ...r, id: r.id.toString() }));
     return paginated(rows, { nextCursor, limit: q.limit });
   }
 
-  /** GET /api/v1/admin/audit-logs/verify-chain — recompute and verify the hash chain. */
   @Get('verify-chain')
+  @AdminPermission('audit.read')
   async verifyChain() {
     return this.audit.verifyChain();
   }
