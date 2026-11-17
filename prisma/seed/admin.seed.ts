@@ -14,7 +14,7 @@ import type { PrismaClient } from '@prisma/client';
 import { hash } from '@node-rs/argon2';
 
 // Use require() to avoid a top-level import of dev-only code in production builds.
-const IS_PROD = process.env.NODE_ENV === 'production';
+const IS_DEV_OR_TEST = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
 
 async function argon2(pw: string): Promise<string> {
   return hash(pw, { memoryCost: 65536, timeCost: 3, parallelism: 1 });
@@ -44,7 +44,7 @@ export async function seedAdmin(prisma: PrismaClient): Promise<void> {
     console.log(`  ✔ Super Admin ${email} already exists (skipping)`);
   }
 
-  if (IS_PROD) return;
+  if (!IS_DEV_OR_TEST) return;
 
   // ── Dev-only accounts — NEVER create in production ───────────────────────
   // Dynamic import avoids bundling dev secrets in production.

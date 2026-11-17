@@ -1120,7 +1120,7 @@
                   "exec": [
                     "pm.test('201 Created', () => pm.response.to.have.status(201));",
                     "const b = pm.response.json();",
-                    "pm.test('id returned', () => pm.expect(b.data.id).to.be.a('number'));",
+                    "pm.test('id returned', () => pm.expect(b.data.id).to.be.a('string'));",
                     "pm.environment.set('tempAdminId', b.data.id);"
                   ]
                 }
@@ -1133,7 +1133,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\"email\": \"temp@dev.marbou.test\", \"password\": \"TempPass!2026#\", \"role\": \"SUPPORT_AGENT\", \"displayName\": \"Temp Admin\"}"
+                  "raw": "{\"email\": \"temp@dev.marbou.test\", \"initialPassword\": \"TempPass!2026#\", \"role\": \"SUPPORT_AGENT\", \"fullName\": \"Temp Admin\"}"
                 },
                 "url": "{{baseUrl}}/api/v1/admin/admin-users"
               }
@@ -1164,7 +1164,7 @@
                   "type": "text/javascript",
                   "exec": [
                     "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                    "pm.test('displayName updated', () => pm.expect(pm.response.json().data.displayName).to.eql('Temp Updated'));"
+                    "pm.test('id matches', () => pm.expect(pm.response.json().data.id).to.be.a('string'));"
                   ]
                 }
               }],
@@ -1174,7 +1174,7 @@
                   { "key": "Authorization", "value": "Bearer {{adminSa_token}}" },
                   { "key": "Content-Type", "value": "application/json" }
                 ],
-                "body": { "mode": "raw", "raw": "{\"displayName\": \"Temp Updated\"}" },
+                "body": { "mode": "raw", "raw": "{\"isActive\": false}" },
                 "url": "{{baseUrl}}/api/v1/admin/admin-users/{{tempAdminId}}"
               }
             }

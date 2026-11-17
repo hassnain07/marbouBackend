@@ -14,7 +14,7 @@ import { AuditActorType } from '../../modules/platform/audit/audit.constants';
  * AuditInterceptor — when a handler is decorated with @Audit({ action, entity }),
  * this interceptor records an AuditLog entry after the handler succeeds.
  *
- * The `actorId` is read from req.admin (bootstrap guard) or req.user (JWT guard,
+ * The `actorId` is read from req.admin (AdminJwtGuard) or req.user (JWT guard,
  * Phase 3+). The `entityId` is taken from req.params.id or req.params.key.
  * `before` is not captured here — routes that need before/after both should use
  * explicit AuditService.record() calls (as the flag and defaults PATCHes do).

@@ -34,7 +34,7 @@ Record of every fix applied to the PRD §9.2 Prisma specification during impleme
 
 ---
 
-## Phase 2: Admin Auth & RBAC (2024-11-15, migration `20261115172821_admin_auth_rbac`)
+## Phase 2: Admin Auth & RBAC (2026-11-15, migration `20261115172821_admin_auth_rbac`)
 
 ### AdminUser Extensions
 
@@ -121,12 +121,23 @@ Two JWT types with different audiences to prevent cross-use:
 
 ### Lockout Progression
 
-Per Appendix C `auth.lockout.*` defaults:
+Per Appendix C `auth.lockout.*` defaults interpreted from PRD text "1/5/15/60":
 
-- **Max attempts:** 5 (configurable via DefaultsService `auth.lockout.maxAttempts`)
-- **Delay progression:** 1 min, 5 min, 15 min, 60 min (tiers based on how many times the account has been locked)
-- **Reset:** On successful login, `failedLoginCount` resets to 0
+**OPEN QUESTION FOR OWNER:** The PRD Appendix C specifies lockout delays as "1/5/15/60" but does not specify the exact failure-count thresholds. This implementation interprets it as:
+
+- **Failure count 5:** 1 minute lockout
+- **Failure count 6:** 5 minutes lockout  
+- **Failure count 7:** 15 minutes lockout
+- **Failure count 8+:** 60 minutes lockout
+
+Alternative interpretation: "1 failure → 1 min, 5 failures → 5 min" (but this conflicts with maxAttempts=5). Please clarify the intended progression.
+
+**Current implementation:**
+- **Max attempts before first lock:** 5 (configurable via DefaultsService `auth.lockout.maxAttempts`)
+- **Delay progression by lock tier:** 1 min (5th failure), 5 min (6th), 15 min (7th), 60 min (8th+)
+- **Counter reset:** On successful login completion (after TOTP verification), `failedLoginCount` resets to 0
 - **Lock timer:** `lockedUntil` is checked before every password/TOTP attempt; if `lockedUntil > now`, return 423 with `retryAfter` in the error payload
+- **No increment while locked:** Failed attempts while account is locked do NOT increment `failedLoginCount`
 
 ### IP Allow-List
 
@@ -205,3 +216,57 @@ All major admin auth events write to the `AuditLog` table (hash-chained, append-
 
 **Family rotation:** Each refresh creates a new session in the same `familyId` and revokes the old session. If an old (revoked) token is reused, the entire family is revoked. This detects token theft: an attacker who steals a token and uses it causes the legitimate user's next refresh to fail, and vice versa. Both parties are immediately logged out, forcing re-authentication.
 
+
+---
+
+## Phase 2 Code Fixes (2026-11-17)
+
+Bugs found and fixed during Phase 2 sign-off review. No schema changes; no new migration required.
+
+### A1 — Immediate cache invalidation on PATCH /admin-users
+
+`PATCH /admin/admin-users/:id` now revokes sessions inside the same DB transaction (`revokeAdminSessionsInTx`) and calls `invalidateSessionCache` after the transaction commits. Previously the controller revoked sessions in a separate `updateMany` after the transaction, so a cache entry could survive between the transaction commit and the separate revoke call.
+
+### A5 — Last-SA lock now covers ALL active SA rows
+
+The previous implementation locked only the row being modified (`WHERE id = $id FOR UPDATE`). Two concurrent SA-demotion requests on different rows could both pass the count check simultaneously. Fixed by locking ALL active SA rows first (`WHERE role='SUPER_ADMIN' AND isActive=true ORDER BY id FOR UPDATE`) so only one of two concurrent demotions can proceed; the second sees count ≤ 1 and returns 409.
+
+### A1 — DELETE /admin-sessions/:id returns 404 on unknown id
+
+Previously used a bare `update({where:{id}})` which threw a Prisma `P2025` (record not found) error, surfacing as 500. Added an explicit `findUnique` check first; returns 404 `NOT_FOUND` for unknown ids.
+
+### A11 — GET /admin/admin-users/:id added
+
+The endpoint was listed in the architecture spec but was missing from the controller. Added `GET /api/v1/admin/admin-users/:id` (SA only, same select projection as list, 404 if unknown).
+
+### A11 — Prisma access moved to repository
+
+`AdminUsersController` previously called `PrismaService` for the main admin CRUD and session revocation. Session revocation within the PATCH transaction is now delegated to `AdminAuthRepository.revokeAdminSessionsInTx`. Admin creation uses `AdminAuthRepository.createAdmin`.
+
+### A7 — Argon2 params unified
+
+`argon2-params.ts` previously imported from the `argon2` package using TypeScript types (`Options`, `argon2id`) that do not exist in the installed version. Fixed to use `HashOptions` and the numeric constant `2` (Argon2id). The seed and admin-users controller now share the same `hashPassword` helper, so hash parameters are identical for all admin accounts.
+
+### A10 — DevOnlyGuard and seed block staging
+
+`DevOnlyGuard` previously only blocked `NODE_ENV=production`; staging could reach dev routes. Fixed to block both `production` and `staging`. The admin seed previously only skipped dev accounts in `production`; fixed to skip them in everything that is not `development` or `test`.
+
+### A10 — Env schema staging/production rules extended
+
+`INTEGRATIONS_MODE=mock` and `DEV_EXPOSE_OTP=true` were previously only rejected in `production`; now also rejected in `staging`.
+
+### JWT — `signAccessToken` parameter order fixed
+
+`AdminTokenService.signAccessToken(adminId, sessionId, role)` had the `role` and `sessionId` arguments in the wrong order relative to the service call `signAccessToken(admin.id, admin.role, session.id)`. Corrected to `signAccessToken(adminId, role, sessionId)`.
+
+### JWT — `verifyMfaToken` / `verifyAccessToken` use strict options
+
+Previously these utils called `verify(token, secret)` without strict options. Now both pass `{ algorithms: ['HS256'], issuer: 'marbou', audience: <expected> }` so alg:none, wrong issuer, and cross-audience tokens are rejected.
+
+### OPEN QUESTION — Lockout progression thresholds
+
+**Still outstanding for owner:** PRD Appendix C states lockout delays as "1/5/15/60" minutes but does not specify the exact failure-count thresholds. Current implementation: 5 failures → 1 min, 6 → 5 min, 7 → 15 min, 8+ → 60 min. Alternative: start locking after fewer failures. Owner must confirm the intended progression.
+
+### OPEN QUESTION — Session cache TTL
+
+Current value: 30 seconds. This means a revoked session can still pass guard checks for up to 30 seconds. The requirement says "≤ 30 s" — this is at the upper bound. Owner may wish to lower it (e.g. 10 s) to tighten the revocation window at the cost of slightly higher Redis traffic from admin requests.

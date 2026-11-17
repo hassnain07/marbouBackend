@@ -6,7 +6,7 @@ import { AdminPermission } from '../../../../common/decorators/admin-permission.
 import { zodPipe } from '../../../../common/pipes/zod-validation.pipe';
 import { patchDefaultSchema } from '../dto/patch-default.dto';
 
-/** Phase 2: AdminJwtGuard + @AdminPermission replaces the temporary AdminBootstrapGuard. */
+/** Admin defaults controller — requires @AdminPermission (Phase 2 guard). */
 @Controller('api/v1/admin/defaults')
 @UseGuards(AdminJwtGuard)
 export class DefaultsAdminController {

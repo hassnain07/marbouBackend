@@ -9,7 +9,7 @@ import { patchAppVersionsSchema } from '../dto/patch-app-versions.dto';
 import { patchMediaLimitsSchema } from '../dto/patch-media-limits.dto';
 import { Audit } from '../../../../common/decorators/audit.decorator';
 
-/** Phase 2: AdminJwtGuard + @AdminPermission replaces the temporary AdminBootstrapGuard. */
+/** Admin config controller — requires @AdminPermission (Phase 2 guard). */
 @Controller('api/v1/admin')
 @UseGuards(AdminJwtGuard)
 export class ConfigAdminController {

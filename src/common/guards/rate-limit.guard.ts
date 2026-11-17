@@ -11,6 +11,7 @@ import { AppError } from '../errors/app-error';
 import { ErrorCodes } from '../errors/error-codes';
 import { getDeviceId } from '../request-context';
 import { configuration } from '../../config/configuration';
+import { getClientIp } from '../utils/client-ip';
 
 /**
  * RateLimitGuard — Redis fixed-window counter per [controller:handler:scope].
@@ -53,7 +54,7 @@ export class RateLimitGuard implements CanActivate {
     const scope = options?.scope;
 
     const req = context.switchToHttp().getRequest<any>();
-    const ip = this.resolveIp(req);
+    const ip = getClientIp(req, configuration.TRUSTED_PROXY_HOPS);
     const deviceId = getDeviceId(req); // undefined when header absent
     const account = (req.user as { id?: string } | undefined)?.id;
 
@@ -100,12 +101,5 @@ export class RateLimitGuard implements CanActivate {
       this.logger.warn(`Rate-limit check skipped (Redis error): ${(err as Error).message}`);
       return true;
     }
-  }
-
-  private resolveIp(req: any): string {
-    const fwd = (req.headers?.['x-forwarded-for'] as string | undefined) ?? '';
-    const direct = fwd.split(',')[0]?.trim() ?? '';
-    if (direct && /^[A-Za-z0-9.:[\]]{1,64}$/.test(direct)) return direct;
-    return String(req.ip ?? 'unknown');
   }
 }

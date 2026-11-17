@@ -6,7 +6,7 @@ import { AdminPermission } from '../../../../common/decorators/admin-permission.
 import { zodPipe } from '../../../../common/pipes/zod-validation.pipe';
 import { patchFlagSchema } from '../dto/patch-flag.dto';
 
-/** Phase 2: AdminJwtGuard + @AdminPermission replaces the temporary AdminBootstrapGuard. */
+/** Admin flags controller — requires @AdminPermission (Phase 2 guard). */
 @Controller('api/v1/admin/flags')
 @UseGuards(AdminJwtGuard)
 export class FeatureFlagsAdminController {

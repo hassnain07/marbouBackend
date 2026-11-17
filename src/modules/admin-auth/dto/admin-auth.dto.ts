@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 export const loginSchema = z.object({
-  email: z.string().email(),
+  // A7: normalize email at the schema boundary (trim + lowercase)
+  email: z.string().email().transform((v) => v.trim().toLowerCase()),
   password: z.string().min(1),
 });
 export type LoginDto = z.infer<typeof loginSchema>;

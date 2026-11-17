@@ -5,6 +5,7 @@ import { zodPipe } from '../../common/pipes/zod-validation.pipe';
 import { loginSchema, verifyTotpSchema, refreshSchema } from './dto/admin-auth.dto';
 import { RateLimit } from '../../common/decorators/rate-limit.decorator';
 import { AdminJwtGuard, type AdminAuthContext } from '../../common/guards/admin-jwt.guard';
+import { AdminAuthenticated } from '../../common/decorators/admin-authenticated.decorator';
 
 @Controller('api/v1/admin/auth')
 export class AdminAuthController {
@@ -16,16 +17,13 @@ export class AdminAuthController {
     @Body(zodPipe(loginSchema)) body: { email: string; password: string },
     @Req() req: Request,
   ) {
-    const ip = resolveIp(req);
-    const ua = req.headers['user-agent'];
-    return this.service.login(body.email, body.password, ip, ua);
+    return this.service.login(body.email, body.password, req);
   }
 
   @Post('2fa/setup')
   @RateLimit({ windowSeconds: 60, max: 10 })
   async setup(@Body('mfaToken') mfaToken: string, @Req() req: Request) {
-    const ip = resolveIp(req);
-    return this.service.setupTotp(mfaToken, ip, req.headers['user-agent']);
+    return this.service.setupTotp(mfaToken, req);
   }
 
   @Post('2fa/verify')
@@ -35,8 +33,7 @@ export class AdminAuthController {
     @Body('mfaToken') mfaToken: string,
     @Req() req: Request,
   ) {
-    const ip = resolveIp(req);
-    return this.service.verifyTotp(mfaToken, body.code, ip, req.headers['user-agent']);
+    return this.service.verifyTotp(mfaToken, body.code, req);
   }
 
   @Post('refresh')
@@ -45,27 +42,21 @@ export class AdminAuthController {
     @Body(zodPipe(refreshSchema)) body: { refreshToken: string },
     @Req() req: Request,
   ) {
-    const ip = resolveIp(req);
-    return this.service.refresh(body.refreshToken, ip, req.headers['user-agent']);
+    return this.service.refresh(body.refreshToken, req);
   }
 
   @Post('logout')
   @UseGuards(AdminJwtGuard)
+  @AdminAuthenticated() // A2: No specific permission required, just authentication
   async logout(@Req() req: Request & { admin: AdminAuthContext }) {
-    await this.service.logout(req.admin.sessionId, req.admin.id);
+    await this.service.logout(req.admin.id, req.admin.sessionId);
     return { loggedOut: true };
   }
 
   @Get('me')
   @UseGuards(AdminJwtGuard)
+  @AdminAuthenticated() // A2: No specific permission required, just authentication
   async me(@Req() req: Request & { admin: AdminAuthContext }) {
     return this.service.me(req.admin.id, req.admin.sessionId);
   }
-}
-
-function resolveIp(req: Request): string {
-  const fwd = (req.headers['x-forwarded-for'] as string | undefined) ?? '';
-  const direct = fwd.split(',')[0]?.trim() ?? '';
-  if (direct && /^[A-Za-z0-9.:[\]]{1,64}$/.test(direct)) return direct;
-  return String(req.ip ?? 'unknown');
 }

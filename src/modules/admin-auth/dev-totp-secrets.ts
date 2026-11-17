@@ -6,7 +6,7 @@
  * These are stored ENCRYPTED in the DB via aesEncrypt() in the seed.
  */
 export const DEV_TOTP_SECRETS = {
-  superadmin: 'JBSWY3DPEHPK3PXP', // base32 of "Hello World" — fixed for reproducible tests
+  superadmin: 'JBSWY3DPEHPK3PXP', // RFC 6238 reference test secret (base32 of "Hello!") — fixed for reproducible tests
   moderator: 'MFRA2RCHKRFA===='.replace(/=+$/, ''),
   support: 'NBSWY3DPEBLW64TMMQ======'.replace(/=+$/, ''),
   finance: 'IFAUCRKBKBCF6QKB',

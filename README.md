@@ -137,11 +137,21 @@ See `.env.example` for the full list. Key required variables:
 | `DATABASE_URL` | PostgreSQL connection string |
 | `REDIS_URL` | Redis connection (supports `redis://`, `rediss://`, auth, DB) |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | User JWT signing (≥ 16 chars) |
-| `ADMIN_JWT_SECRET` | Admin JWT signing (≥ 16 chars) |
-| `ADMIN_JWT_ACCESS_TTL` / `ADMIN_JWT_REFRESH_TTL` | Admin token lifetimes (default 15m / 12h) |
-| `ADMIN_TOTP_ENC_KEY` | AES-256-GCM key for TOTP secret encryption (≥ 32 chars) |
-| `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` | First Super Admin credentials (seeded by `prisma:seed`; must enroll TOTP at first login) |
-| `INTEGRATIONS_MODE` | `mock` (dev/test) or `live` (production) |
+| `ADMIN_JWT_SECRET` | Admin JWT signing (**≥ 32 chars**; must not contain "change-me" in staging/production) |
+| `ADMIN_JWT_ACCESS_TTL` / `ADMIN_JWT_REFRESH_TTL` | Admin token lifetimes (default 15m / 30d) |
+| `ADMIN_TOTP_ENC_KEY` | AES-256-GCM key for TOTP secret encryption (**≥ 32 chars**; must not contain "change-me" in staging/production) |
+| `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` | First Super Admin credentials (seeded by `prisma:seed`; must enroll TOTP at first login; `ADMIN_SEED_PASSWORD` must differ from default in staging/production) |
+| `TRUSTED_PROXY_HOPS` | Integer (default `0`). Set to `1` when behind one trusted proxy (nginx, cloud LB). With `0`, `x-forwarded-for` is ignored and `req.ip` is used directly — prevents IP spoofing. With `N > 0`, takes the Nth IP from the right of `x-forwarded-for`. |
+| `INTEGRATIONS_MODE` | `mock` (dev/test only) or `live` (staging/production — `mock` is **rejected** in staging and production) |
+
+**Staging / production rules (enforced at boot):**
+- `ADMIN_JWT_SECRET` must not contain `"change-me"`.
+- `ADMIN_TOTP_ENC_KEY` must not contain `"change-me"`.
+- `ADMIN_SEED_PASSWORD` must not be the default `ChangeMe!2026#`.
+- `INTEGRATIONS_MODE` must be `live`.
+- `DEV_EXPOSE_OTP` must be `false`.
+- Dev seeds (`sa@dev.marbou.test` etc.) are **never created** in staging or production.
+- `/dev/*` routes return **403 Forbidden** in staging and production.
 
 ---
 
@@ -230,6 +240,7 @@ Permission enforcement:
 | **Admin Management** ||||
 | GET | `/api/v1/admin/admin-users` | `admin.users.manage` | List admins (SA) |
 | POST | `/api/v1/admin/admin-users` | `admin.users.manage` | Create admin (SA) |
+| GET | `/api/v1/admin/admin-users/:id` | `admin.users.manage` | Get admin by ID (SA; 404 if unknown) |
 | PATCH | `/api/v1/admin/admin-users/:id` | `admin.users.manage` | Update admin (SA, last-SA guard) |
 | GET | `/api/v1/admin/admin-sessions` | `admin.sessions.manage` | List sessions (SA) |
 | DELETE | `/api/v1/admin/admin-sessions/:id` | `admin.sessions.manage` | Revoke session (SA) |

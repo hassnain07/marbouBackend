@@ -40,7 +40,7 @@ export const AdminTokenService = {
     return sign(payload, configuration.ADMIN_JWT_SECRET, { expiresIn: 300 }); // 5 min
   },
 
-  signAccessToken(adminId: string, sessionId: string, role: string): string {
+  signAccessToken(adminId: string, role: string, sessionId: string): string {
     const ttlSeconds = AdminTokenService.ttlToSeconds(configuration.ADMIN_JWT_ACCESS_TTL || '15m');
     const payload: AdminAccessClaims = { sub: adminId, sid: sessionId, role, iss: ISSUER, aud: AUD_ADMIN };
     return sign(payload, configuration.ADMIN_JWT_SECRET, { expiresIn: ttlSeconds });
@@ -48,9 +48,13 @@ export const AdminTokenService = {
 
   verifyMfaToken(token: string): AdminMfaClaims | null {
     try {
-      const payload = verify(token, configuration.ADMIN_JWT_SECRET);
+      const payload = verify(token, configuration.ADMIN_JWT_SECRET, {
+        algorithms: ['HS256'],
+        issuer: ISSUER,
+        audience: AUD_ADMIN_MFA,
+      });
       const c = payload as AdminMfaClaims;
-      if (c.aud !== AUD_ADMIN_MFA || c.stage !== 'MFA') return null;
+      if (c.stage !== 'MFA') return null;
       return c;
     } catch {
       return null;
@@ -59,10 +63,12 @@ export const AdminTokenService = {
 
   verifyAccessToken(token: string): AdminAccessClaims | null {
     try {
-      const payload = verify(token, configuration.ADMIN_JWT_SECRET);
-      const c = payload as AdminAccessClaims;
-      if (c.aud !== AUD_ADMIN) return null;
-      return c;
+      const payload = verify(token, configuration.ADMIN_JWT_SECRET, {
+        algorithms: ['HS256'],
+        issuer: ISSUER,
+        audience: AUD_ADMIN,
+      });
+      return payload as AdminAccessClaims;
     } catch {
       return null;
     }

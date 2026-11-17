@@ -23,14 +23,17 @@ const envSchema = z
     JWT_ACCESS_TTL: z.string().default('15m'),
     JWT_REFRESH_TTL: z.string().default('30d'),
 
-    ADMIN_JWT_SECRET: z.string().min(16, 'ADMIN_JWT_SECRET must be at least 16 chars'),
+    ADMIN_JWT_SECRET: z.string().min(32, 'ADMIN_JWT_SECRET must be at least 32 chars'),
     ADMIN_JWT_ACCESS_TTL: z.string().default('15m'),
-    ADMIN_JWT_REFRESH_TTL: z.string().default('12h'),
+    ADMIN_JWT_REFRESH_TTL: z.string().default('30d'),
     ADMIN_TOTP_ENC_KEY: z.string().min(32, 'ADMIN_TOTP_ENC_KEY must be at least 32 chars'),
 
     // Phase 2: Super Admin seed credentials (no bootstrap backdoor).
     ADMIN_SEED_EMAIL: z.string().email().default('admin@marbou.test'),
     ADMIN_SEED_PASSWORD: z.string().min(12, 'ADMIN_SEED_PASSWORD must be at least 12 chars').default('ChangeMe!2026#'),
+
+    // Trusted proxy configuration for IP extraction (A6).
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 
     S3_ENDPOINT: z.string().default('http://localhost:9000'),
     S3_REGION: z.string().default('us-east-1'),
@@ -86,20 +89,48 @@ const envSchema = z
       .transform((v) => v === 'true'),
   })
   .superRefine((env, ctx) => {
-    // Mock adapters must never load in production (integration matrix §10).
-    if (env.NODE_ENV === 'production' && env.INTEGRATIONS_MODE === 'mock') {
+    // Mock adapters must never load in production or staging (integration matrix §10).
+    if ((env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') && env.INTEGRATIONS_MODE === 'mock') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'INTEGRATIONS_MODE=mock is not allowed in production',
+        message: 'INTEGRATIONS_MODE=mock is not allowed in staging or production',
         path: ['INTEGRATIONS_MODE'],
       });
     }
-    if (env.NODE_ENV === 'production' && env.DEV_EXPOSE_OTP) {
+    if ((env.NODE_ENV === 'production' || env.NODE_ENV === 'staging') && env.DEV_EXPOSE_OTP) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'DEV_EXPOSE_OTP must be false in production',
+        message: 'DEV_EXPOSE_OTP must be false in staging and production',
         path: ['DEV_EXPOSE_OTP'],
       });
+    }
+
+    // A10: Environment safety for staging and production
+    if (env.NODE_ENV === 'staging' || env.NODE_ENV === 'production') {
+      // Reject insecure secrets containing "change-me" or similar
+      if (env.ADMIN_JWT_SECRET.toLowerCase().includes('change-me')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'ADMIN_JWT_SECRET must not contain "change-me" in staging/production',
+          path: ['ADMIN_JWT_SECRET'],
+        });
+      }
+      if (env.ADMIN_TOTP_ENC_KEY.toLowerCase().includes('change-me')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'ADMIN_TOTP_ENC_KEY must not contain "change-me" in staging/production',
+          path: ['ADMIN_TOTP_ENC_KEY'],
+        });
+      }
+
+      // Reject default seed password in staging/production
+      if (env.ADMIN_SEED_PASSWORD === 'ChangeMe!2026#') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'ADMIN_SEED_PASSWORD must be changed from the default in staging/production',
+          path: ['ADMIN_SEED_PASSWORD'],
+        });
+      }
     }
   });
 
