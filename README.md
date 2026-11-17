@@ -138,33 +138,106 @@ See `.env.example` for the full list. Key required variables:
 | `REDIS_URL` | Redis connection (supports `redis://`, `rediss://`, auth, DB) |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | User JWT signing (≥ 16 chars) |
 | `ADMIN_JWT_SECRET` | Admin JWT signing (≥ 16 chars) |
-| `ADMIN_TOTP_ENC_KEY` | AES key for TOTP secret encryption (≥ 32 chars) |
-| `ADMIN_BOOTSTRAP_KEY` | Temporary dev admin access key (≥ 16 chars; forbidden in production, replaced by TOTP in Phase 2) |
-| `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` | First Super Admin credentials (seeded by `prisma:seed`) |
+| `ADMIN_JWT_ACCESS_TTL` / `ADMIN_JWT_REFRESH_TTL` | Admin token lifetimes (default 15m / 12h) |
+| `ADMIN_TOTP_ENC_KEY` | AES-256-GCM key for TOTP secret encryption (≥ 32 chars) |
+| `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` | First Super Admin credentials (seeded by `prisma:seed`; must enroll TOTP at first login) |
 | `INTEGRATIONS_MODE` | `mock` (dev/test) or `live` (production) |
 
 ---
 
-## Phase 1 endpoints
+## Admin Authentication (Phase 2)
 
-All admin routes require header `x-admin-bootstrap-key: <ADMIN_BOOTSTRAP_KEY>` (temporary Phase 1 auth; Phase 2 adds TOTP admin auth).
+All `/api/v1/admin/*` routes (except login and 2FA endpoints) require a valid admin JWT Bearer token with audience `marbou-admin`. Admin auth flow:
 
-| Method | Path | Purpose |
+1. **POST /api/v1/admin/auth/login** `{email, password}` → Returns MFA-stage token + `mfaStage` ("SETUP_REQUIRED" or "VERIFY")
+2. **If not enrolled:** POST /api/v1/admin/auth/2fa/setup (MFA-stage token) → Returns TOTP secret + QR code URI
+3. **POST /api/v1/admin/auth/2fa/verify** `{code, mfaToken}` → Returns `{accessToken, refreshToken}` (usable admin JWT)
+4. **Use accessToken** as `Authorization: Bearer <token>` for admin routes
+5. **POST /api/v1/admin/auth/refresh** `{refreshToken}` when access token expires → New access + refresh tokens
+6. **POST /api/v1/admin/auth/logout** to revoke the session
+
+**Security features:**
+- Argon2id password hashing
+- Mandatory TOTP 2FA (RFC 6238, 30s step, ±1 window, replay protection)
+- TOTP secrets encrypted at rest (AES-256-GCM)
+- Refresh token rotation with reuse detection (revokes entire session family on reuse)
+- Progressive account lockout (5 failed attempts → 1/5/15/60 min delays)
+- IP allow-list per admin (optional, Super Admin configurable)
+- Session revocation takes effect immediately (Redis-cached validation)
+- All login attempts logged (AdminLoginLog) + major events audited
+
+**Dev admin accounts (seeded in dev/test only, never in production):**
+| Email | Role | TOTP |
 |---|---|---|
-| GET | `/api/v1/config` | Client config (versions, maintenance, media limits, flags) — ETag + 304 |
-| GET | `/api/v1/flags` | Public, client-safe flag values (excludes internal flags) |
-| GET | `/api/v1/admin/flags` | All flags (admin) |
-| PATCH | `/api/v1/admin/flags/:key` | Toggle a flag (audit + history; last-OTP-channel enforced) |
-| GET | `/api/v1/admin/flags/:key/history` | Flag change history |
-| GET | `/api/v1/admin/media-limits` | Media limits config |
-| PATCH | `/api/v1/admin/media-limits` | Update media limits (audited) |
-| PATCH | `/api/v1/admin/app-versions` | Update min app versions (audited) |
-| PATCH | `/api/v1/admin/maintenance` | Toggle maintenance mode (audited) |
-| GET | `/api/v1/admin/defaults` | All Appendix C configurable defaults |
-| PATCH | `/api/v1/admin/defaults` | Update a default (type + range validated; audited) |
-| GET | `/api/v1/admin/audit-logs` | Cursor-paginated audit log (filter by entity/entityId/actor/action/date) |
-| GET | `/api/v1/admin/audit-logs/verify-chain` | Verify the hash-chained audit log |
-| GET | `/dev/flag-test` | Dev-only route guarded by `@RequiresFlag('ENABLE_MONETIZATION')` |
+| `sa@dev.marbou.test` | SUPER_ADMIN | Pre-enrolled (known secret) |
+| `mod@dev.marbou.test` | CONTENT_MODERATOR | Pre-enrolled |
+| `sup@dev.marbou.test` | SUPPORT_AGENT | Pre-enrolled |
+| `fin@dev.marbou.test` | FINANCIAL_AUDITOR | Pre-enrolled |
+| `lock@dev.marbou.test` | SUPPORT_AGENT | Pre-enrolled (lockout tests) |
+
+Password: `ChangeMe!2026#` (from `ADMIN_SEED_PASSWORD`)
+
+Postman uses `/dev/admin/totp?email=<email>` to fetch current TOTP codes automatically in the P02 login folder.
+
+---
+
+## RBAC (Role-Based Access Control)
+
+Four admin roles with table-driven permissions (architecture §5.8):
+
+| Role | Permissions |
+|---|---|
+| **SUPER_ADMIN** | All permissions (config, flags, defaults, audit, admin management, analytics) |
+| **CONTENT_MODERATOR** | Moderation only (hide/delete listings, suspend users, reports, appeals) |
+| **SUPPORT_AGENT** | Support queues (tickets, CV queue, verification queue, user search) |
+| **FINANCIAL_AUDITOR** | Payments console, audit logs (read-only), refunds |
+
+Permission enforcement:
+- `@AdminPermission('permission.key')` decorator on routes
+- `AdminJwtGuard` validates JWT + checks session validity + enforces RBAC
+- Missing/invalid token → 401; valid token but wrong role → 403
+
+---
+
+## Phase 1 & 2 Endpoints
+
+| Method | Path | Permission | Purpose |
+|---|---|---|---|
+| **Public** ||||
+| GET | `/api/v1/config` | — | Client config (ETag + 304) |
+| GET | `/api/v1/flags` | — | Public flags |
+| GET | `/health`, `/health/ready` | — | Health checks |
+| **Admin Auth** ||||
+| POST | `/api/v1/admin/auth/login` | — | Email + password → MFA-stage token |
+| POST | `/api/v1/admin/auth/2fa/setup` | MFA-stage | Generate TOTP secret (if not enrolled) |
+| POST | `/api/v1/admin/auth/2fa/verify` | MFA-stage | Verify TOTP → access + refresh tokens |
+| POST | `/api/v1/admin/auth/refresh` | — | Rotate refresh token |
+| POST | `/api/v1/admin/auth/logout` | Any admin | Revoke current session |
+| GET | `/api/v1/admin/auth/me` | Any admin | Current admin info |
+| **Platform Config** ||||
+| GET | `/api/v1/admin/flags` | `config.flags.read` | All flags (SA) |
+| PATCH | `/api/v1/admin/flags/:key` | `config.flags.write` | Toggle flag (SA) |
+| GET | `/api/v1/admin/flags/:key/history` | `config.flags.read` | Flag history (SA) |
+| GET | `/api/v1/admin/media-limits` | `config.media-limits.read` | Media limits (SA) |
+| PATCH | `/api/v1/admin/media-limits` | `config.media-limits.write` | Update limits (SA) |
+| PATCH | `/api/v1/admin/app-versions` | `config.app-versions.write` | Min app versions (SA) |
+| PATCH | `/api/v1/admin/maintenance` | `config.maintenance.write` | Maintenance mode (SA) |
+| GET | `/api/v1/admin/defaults` | `config.defaults.read` | Appendix C defaults (SA) |
+| PATCH | `/api/v1/admin/defaults` | `config.defaults.write` | Update default (SA) |
+| **Audit** ||||
+| GET | `/api/v1/admin/audit-logs` | `audit.read` | Audit log (FIN, SA) |
+| GET | `/api/v1/admin/audit-logs/verify-chain` | `audit.read` | Verify hash chain (FIN, SA) |
+| **Admin Management** ||||
+| GET | `/api/v1/admin/admin-users` | `admin.users.manage` | List admins (SA) |
+| POST | `/api/v1/admin/admin-users` | `admin.users.manage` | Create admin (SA) |
+| PATCH | `/api/v1/admin/admin-users/:id` | `admin.users.manage` | Update admin (SA, last-SA guard) |
+| GET | `/api/v1/admin/admin-sessions` | `admin.sessions.manage` | List sessions (SA) |
+| DELETE | `/api/v1/admin/admin-sessions/:id` | `admin.sessions.manage` | Revoke session (SA) |
+| GET | `/api/v1/admin/admin-login-logs` | `admin.login-logs.read` | Login logs (SA) |
+| **Dev Only** ||||
+| GET | `/dev/flag-test` | — | FlagGuard test route |
+| GET | `/dev/admin/totp` | — | Current TOTP code for dev admin |
+| POST | `/dev/admin/unlock` | — | Clear lockout for dev admin |
 
 ---
 

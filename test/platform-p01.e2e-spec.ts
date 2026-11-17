@@ -347,8 +347,6 @@ describe('Phase 1 — Platform Services (e2e)', () => {
     });
   });
 
-  // ── Missing bootstrap key / wrong key → 401 ──────────────────────────────
-
   // ── Admin JWT guard (missing/wrong token → 401) ──────────────────────────
 
   describe('AdminJwtGuard', () => {
