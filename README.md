@@ -143,6 +143,8 @@ See `.env.example` for the full list. Key required variables:
 | `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` | First Super Admin credentials (seeded by `prisma:seed`; must enroll TOTP at first login; `ADMIN_SEED_PASSWORD` must differ from default in staging/production) |
 | `TRUSTED_PROXY_HOPS` | Integer (default `0`). Set to `1` when behind one trusted proxy (nginx, cloud LB). With `0`, `x-forwarded-for` is ignored and `req.ip` is used directly — prevents IP spoofing. With `N > 0`, takes the Nth IP from the right of `x-forwarded-for`. |
 | `INTEGRATIONS_MODE` | `mock` (dev/test only) or `live` (staging/production — `mock` is **rejected** in staging and production) |
+| `RATE_LIMIT_AUTH_PER_MINUTE` | Per-IP rate limit on admin auth endpoints (login, 2fa/setup, 2fa/verify, refresh). **Production default: 10.** Set to `200` in `.env.example` for local dev so Newman collection runs pass without flushing Redis between runs. |
+| `RATE_LIMIT_DEFAULT_PER_MINUTE` | Per-IP rate limit on all other endpoints (default: 60). |
 
 **Staging / production rules (enforced at boot):**
 - `ADMIN_JWT_SECRET` must not contain `"change-me"`.

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AdminRole } from '@prisma/client';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import { RedisService } from '../../redis/redis.service';
 import { AuditService } from '../platform/audit/audit.service';
@@ -25,7 +25,7 @@ import { getClientIp } from '../../common/utils/client-ip';
 export class AdminAuthService {
   constructor(
     private readonly repo: AdminAuthRepository,
-    private readonly redis: RedisService,
+    readonly redis: RedisService,
     private readonly audit: AuditService,
   ) {}
 
@@ -211,7 +211,7 @@ export class AdminAuthService {
     const refreshTtlMs = AdminTokenService.ttlToSeconds(env.ADMIN_JWT_REFRESH_TTL ?? '12h') * 1000;
     const expiresAt = new Date(Date.now() + refreshTtlMs);
     const { token: refreshToken, hash: refreshTokenHash } = AdminTokenService.generateRefreshToken();
-    const familyId = crypto.randomUUID();
+    const familyId = randomUUID();
 
     const session = await this.repo.createSession({
       adminId: admin.id, familyId, refreshTokenHash, ip, userAgent, expiresAt,
@@ -244,7 +244,7 @@ export class AdminAuthService {
     }
 
     // A4: Atomic claim
-    const newSessionPlaceholderId = crypto.randomUUID();
+    const newSessionPlaceholderId = randomUUID();
     const claimed = await this.repo.claimSessionForRefresh(oldSession.id, newSessionPlaceholderId);
 
     if (claimed === 0) {

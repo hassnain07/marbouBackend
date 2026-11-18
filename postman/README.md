@@ -28,6 +28,8 @@ All env variable names are identical between both env files.
 | `adminFin_email` | Financial Auditor email | `fin@dev.marbou.test` |
 | `adminPassword` | Shared dev account password | `ChangeMe!2026#` |
 | `adminSa_token` | Super Admin access JWT | *(set by P02 00 Login)* |
+
+> **Newman / local runs:** set `RATE_LIMIT_AUTH_PER_MINUTE=200` in your `.env` (already the default in `.env.example`) so the auth endpoints tolerate the repeated login requests Newman generates without hitting the rate-limit window between runs.
 | `adminSa_refreshToken` | Super Admin refresh token | *(set by P02 00 Login)* |
 | `adminMod_token` | Moderator access JWT | *(set by P02 00 Login)* |
 | `adminMod_refreshToken` | Moderator refresh token | *(set by P02 00 Login)* |

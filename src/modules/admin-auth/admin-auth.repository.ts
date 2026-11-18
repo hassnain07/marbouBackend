@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma, AdminRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AppError } from '../../common/errors/app-error';
+import { ErrorCodes } from '../../common/errors/error-codes';
 
 /** Columns returned on list/get operations — no sensitive fields. */
 const ADMIN_USER_SELECT = {
@@ -293,15 +295,51 @@ export class AdminAuthRepository {
   }
 
   /**
-   * Lock all active Super Admin rows for update (A5).
-   * Must be called within a transaction.
+   * Patch an admin user inside a single transaction:
+   * 1. Lock ALL active SA rows (A5 — prevents concurrent last-SA bypass).
+   * 2. Enforce last-SA guard.
+   * 3. Apply field updates.
+   * 4. Revoke sessions if role changed or account deactivated (returns revoked ids).
    */
-  async lockActiveSuperAdmins(tx: Prisma.TransactionClient): Promise<string[]> {
-    const result = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT id FROM "AdminUser"
-      WHERE role = 'SUPER_ADMIN' AND "isActive" = true
-      ORDER BY id FOR UPDATE
-    `;
-    return result.map((r) => r.id);
+  async patchAdminInTx(
+    id: string,
+    existing: { role: string; isActive: boolean; ipAllowList: string[] },
+    patch: { role?: string; isActive?: boolean; ipAllowList?: string[] },
+  ): Promise<{ updated: { id: string; role: string; isActive: boolean; ipAllowList: string[] }; revokedSessionIds: string[] }> {
+    return this.prisma.$transaction(async (tx) => {
+      // A5: Lock ALL active SA rows to prevent concurrent demotions racing past the count
+      const saRows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "AdminUser"
+        WHERE role = 'SUPER_ADMIN' AND "isActive" = true
+        ORDER BY id FOR UPDATE
+      `;
+
+      const isCurrentlySa = existing.role === 'SUPER_ADMIN' && existing.isActive;
+      const wouldDemote = patch.role !== undefined && patch.role !== 'SUPER_ADMIN';
+      const wouldDeactivate = patch.isActive === false;
+      if (isCurrentlySa && (wouldDemote || wouldDeactivate) && saRows.length <= 1) {
+        throw AppError.conflict(ErrorCodes.ADM_LAST_SUPER_ADMIN);
+      }
+
+      const data: Record<string, unknown> = {};
+      if (patch.role !== undefined) data.role = patch.role;
+      if (patch.isActive !== undefined) data.isActive = patch.isActive;
+      if (patch.ipAllowList !== undefined) data.ipAllowList = patch.ipAllowList;
+
+      const updated = await tx.adminUser.update({
+        where: { id },
+        data,
+        select: { id: true, role: true, isActive: true, ipAllowList: true },
+      });
+
+      let revokedIds: string[] = [];
+      if (patch.role !== undefined || patch.isActive === false) {
+        const reason = patch.isActive === false ? 'deactivated' : 'role changed';
+        revokedIds = await this.revokeAdminSessionsInTx(tx, id, reason);
+      }
+
+      return { updated, revokedSessionIds: revokedIds };
+    });
   }
+
 }

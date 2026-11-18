@@ -108,52 +108,19 @@ export class AdminUsersController {
       before.ipAllowListCount = existing.ipAllowList.length;
     }
 
-    // A5: Last-SA lock + update in one transaction
-    const { result, revokedSessionIds } = await this.repo['prisma'].$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
-      // Lock ALL active SA rows first (A5)
-      const saRows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id FROM "AdminUser"
-        WHERE role = 'SUPER_ADMIN' AND "isActive" = true
-        ORDER BY id FOR UPDATE
-      `;
+    // All Prisma/transaction logic lives in the repository (item 2).
+    const { updated: result, revokedSessionIds } = await this.repo.patchAdminInTx(id, existing, body);
 
-      const isCurrentlySa = existing.role === AdminRole.SUPER_ADMIN && existing.isActive;
-      const wouldDemote = body.role !== undefined && body.role !== AdminRole.SUPER_ADMIN;
-      const wouldDeactivate = body.isActive === false;
-      if (isCurrentlySa && (wouldDemote || wouldDeactivate) && saRows.length <= 1) {
-        throw AppError.conflict(ErrorCodes.ADM_LAST_SUPER_ADMIN);
-      }
-
-      const data: Record<string, unknown> = {};
-      if (body.role !== undefined) data.role = body.role;
-      if (body.isActive !== undefined) data.isActive = body.isActive;
-      if (body.ipAllowList !== undefined) data.ipAllowList = body.ipAllowList;
-
-      const updated = await tx.adminUser.update({
-        where: { id },
-        data,
-        select: { id: true, role: true, isActive: true, ipAllowList: true },
-      });
-
-      // Revoke sessions inside transaction if role changed or deactivated
-      let revokedIds: string[] = [];
-      if (body.role !== undefined || body.isActive === false) {
-        const reason = body.isActive === false ? 'deactivated' : 'role changed';
-        revokedIds = await this.repo.revokeAdminSessionsInTx(tx, id, reason);
-      }
-      return { result: updated, revokedSessionIds: revokedIds };
-    });
-
-    // A1: invalidate cache after transaction
+    // A1: invalidate Redis cache for revoked sessions (after transaction commits)
     if (revokedSessionIds.length > 0) {
-      await invalidateSessionCache(this.svc['redis'], ...revokedSessionIds);
+      await invalidateSessionCache(this.svc.redis, ...revokedSessionIds);
     }
 
-    // Post-revocation audit via service (keeps single code path for audit events)
-    if (body.isActive === false && revokedSessionIds.length >= 0) {
+    // Post-revocation audit (single code path through service)
+    if (body.isActive === false) {
       await this.svc.deactivateAdmin(req.admin.id, id, revokedSessionIds);
-    } else if (body.role !== undefined && revokedSessionIds.length >= 0) {
-      await this.svc.changeAdminRole(req.admin.id, id, result.role, revokedSessionIds);
+    } else if (body.role !== undefined) {
+      await this.svc.changeAdminRole(req.admin.id, id, result.role as AdminRole, revokedSessionIds);
     }
 
     const after: Record<string, unknown> = { role: result.role, isActive: result.isActive };

@@ -6,13 +6,14 @@ import { loginSchema, verifyTotpSchema, refreshSchema } from './dto/admin-auth.d
 import { RateLimit } from '../../common/decorators/rate-limit.decorator';
 import { AdminJwtGuard, type AdminAuthContext } from '../../common/guards/admin-jwt.guard';
 import { AdminAuthenticated } from '../../common/decorators/admin-authenticated.decorator';
+import { configuration } from '../../config/configuration';
 
 @Controller('api/v1/admin/auth')
 export class AdminAuthController {
   constructor(private readonly service: AdminAuthService) {}
 
   @Post('login')
-  @RateLimit({ windowSeconds: 60, max: 10 })
+  @RateLimit({ windowSeconds: 60, max: configuration.RATE_LIMIT_AUTH_PER_MINUTE })
   async login(
     @Body(zodPipe(loginSchema)) body: { email: string; password: string },
     @Req() req: Request,
@@ -21,13 +22,13 @@ export class AdminAuthController {
   }
 
   @Post('2fa/setup')
-  @RateLimit({ windowSeconds: 60, max: 10 })
+  @RateLimit({ windowSeconds: 60, max: configuration.RATE_LIMIT_AUTH_PER_MINUTE })
   async setup(@Body('mfaToken') mfaToken: string, @Req() req: Request) {
     return this.service.setupTotp(mfaToken, req);
   }
 
   @Post('2fa/verify')
-  @RateLimit({ windowSeconds: 60, max: 10 })
+  @RateLimit({ windowSeconds: 60, max: configuration.RATE_LIMIT_AUTH_PER_MINUTE })
   async verify(
     @Body(zodPipe(verifyTotpSchema)) body: { code: string },
     @Body('mfaToken') mfaToken: string,
@@ -37,7 +38,7 @@ export class AdminAuthController {
   }
 
   @Post('refresh')
-  @RateLimit({ windowSeconds: 60, max: 20 })
+  @RateLimit({ windowSeconds: 60, max: configuration.RATE_LIMIT_AUTH_PER_MINUTE })
   async refresh(
     @Body(zodPipe(refreshSchema)) body: { refreshToken: string },
     @Req() req: Request,
@@ -47,7 +48,7 @@ export class AdminAuthController {
 
   @Post('logout')
   @UseGuards(AdminJwtGuard)
-  @AdminAuthenticated() // A2: No specific permission required, just authentication
+  @AdminAuthenticated()
   async logout(@Req() req: Request & { admin: AdminAuthContext }) {
     await this.service.logout(req.admin.id, req.admin.sessionId);
     return { loggedOut: true };
@@ -55,7 +56,7 @@ export class AdminAuthController {
 
   @Get('me')
   @UseGuards(AdminJwtGuard)
-  @AdminAuthenticated() // A2: No specific permission required, just authentication
+  @AdminAuthenticated()
   async me(@Req() req: Request & { admin: AdminAuthContext }) {
     return this.service.me(req.admin.id, req.admin.sessionId);
   }

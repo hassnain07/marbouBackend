@@ -8,7 +8,7 @@
  */
 
 import type { INestApplication } from '@nestjs/common';
-import * as request from 'supertest';
+import request from 'supertest';
 import { createApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { hotp, currentTotpStep } from '../src/common/utils/totp';
@@ -88,6 +88,24 @@ describe('Admin Auth & RBAC (E2E)', () => {
     prisma = app.get(PrismaService);
     await app.init();
 
+    // Reset all dev accounts to a clean state before the suite starts.
+    // Previous test runs may have left lockouts, role changes, or used TOTP steps.
+    const devEmails = [SA_EMAIL, MOD_EMAIL, SUP_EMAIL, FIN_EMAIL, 'lock@dev.marbou.test'];
+    await prisma.adminUser.updateMany({
+      where: { email: { in: devEmails } },
+      data: { failedLoginCount: 0, lockedUntil: null },
+    });
+    // Always restore SA role in case a previous last-SA test left it demoted.
+    // Also revoke any stale sessions so the guard cache is clean.
+    await prisma.adminUser.update({
+      where: { email: SA_EMAIL },
+      data: { role: 'SUPER_ADMIN', isActive: true },
+    });
+    await prisma.adminSession.updateMany({
+      where: { adminUser: { email: SA_EMAIL }, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'e2e suite reset' },
+    });
+
     saTokens  = await fullLogin(app, SA_EMAIL,  DEV_PW);
     modTokens = await fullLogin(app, MOD_EMAIL, DEV_PW);
     supTokens = await fullLogin(app, SUP_EMAIL, DEV_PW);
@@ -151,8 +169,17 @@ describe('Admin Auth & RBAC (E2E)', () => {
 
       const verifyRes = await request(app.getHttpServer())
         .post('/api/v1/admin/auth/2fa/verify')
-        .send({ mfaToken, code })
-        .expect(201);
+        .send({ mfaToken, code });
+      if (verifyRes.status !== 201) {
+        // Debug: check actual DB state
+        const dbAdmin = await prisma.adminUser.findUnique({
+          where: { email: NEW_EMAIL },
+          select: { isActive: true, totpSecret: true, totpEnabledAt: true, ipAllowList: true, lockedUntil: true, failedLoginCount: true },
+        });
+        console.error('2fa/verify enrollment error:', JSON.stringify(verifyRes.body));
+        console.error('DB admin state:', JSON.stringify(dbAdmin));
+      }
+      expect(verifyRes.status).toBe(201);
       expect(verifyRes.body.data.accessToken).toBeTruthy();
       expect(verifyRes.body.data.refreshToken).toBeTruthy();
     });
@@ -208,11 +235,14 @@ describe('Admin Auth & RBAC (E2E)', () => {
     });
 
     afterAll(async () => {
-      // Clean up throwaway session
-      await request(app.getHttpServer())
-        .post('/api/v1/admin/auth/logout')
-        .set('Authorization', `Bearer ${sessionTokens.accessToken}`)
-        .send();
+      // Clean up throwaway session — ignore errors if already expired/revoked
+      if (sessionTokens?.accessToken) {
+        await request(app.getHttpServer())
+          .post('/api/v1/admin/auth/logout')
+          .set('Authorization', `Bearer ${sessionTokens.accessToken}`)
+          .send()
+          .catch(() => {});
+      }
     });
   });
 
