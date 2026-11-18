@@ -24,9 +24,9 @@ export const ARGON2_PARAMS: HashOptions = {
  *
  * When an unknown email attempts login, we verify against this hash instead of
  * immediately returning 401. This makes unknown-email and wrong-password timing
- * indistinguishable.
- *
- * Generated with: argon2.hash('dummy-password-never-used-for-timing-protection', ARGON2_PARAMS)
+ * indistinguishable. The original password used to generate this hash is
+ * intentionally not documented here — the value exists purely for constant-time
+ * verification and must never be used to authenticate anyone.
  */
 export const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=65536,t=3,p=4$6cMJlS2FDo2D+u1wAdQP9Q$iKtzpCP37pI/A2F6/snbXtM225OPlLzlsGT4VB6uEbg';

@@ -2,7 +2,7 @@
 
 Record of every fix applied to the PRD §9.2 Prisma specification during implementation. Per the architecture doc (§6, §14): the §9.2 schema is a specification, not machine-validated; Phase 0 runs `prisma validate` / `prisma migrate dev` and fixes issues without changing intent, logging every change here.
 
-## Phase 0 — Foundation
+## Phase 0 — Foundation (2026-11-13)
 
 1. **Extensions declared in datasource.** Added `extensions = [postgis, pg_trgm]` to the `datasource db` block and `previewFeatures = ["postgresqlExtensions"]` to the generator. The §9.2 comment said the `location` geography column is "added by SQL migration and queried via raw SQL." To keep the column tracked by Prisma (so future `migrate diff` does not drop it) it is declared as `location Unsupported("geography(Point,4326)")?`, which requires PostGIS to exist *before* the `Listing` table is created. Declaring the extensions in the datasource makes the generated init migration emit `CREATE EXTENSION IF NOT EXISTS postgis; CREATE EXTENSION IF NOT EXISTS pg_trgm;` at the top, before `Listing`, fixing the extension/column ordering. This absorbs the architecture doc's separate `0002_extensions_postgis_trgm` migration into `0001_init` (functionally equivalent; intent preserved).
 

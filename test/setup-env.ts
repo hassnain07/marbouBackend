@@ -19,7 +19,7 @@ const defaults: Record<string, string> = {
   REDIS_URL: 'redis://localhost:6379',
   JWT_ACCESS_SECRET: 'test-access-secret-at-least-16-chars',
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-16-chars',
-  ADMIN_JWT_SECRET: 'test-admin-secret-at-least-16-chars',
+  ADMIN_JWT_SECRET: 'test-admin-jwt-secret-at-least-32-chars-long',
   ADMIN_TOTP_ENC_KEY: 'test-totp-enc-key-must-be-32-chars-xx',
   ADMIN_SEED_EMAIL: 'admin@marbou.test',
   ADMIN_SEED_PASSWORD: 'ChangeMe!2026#',

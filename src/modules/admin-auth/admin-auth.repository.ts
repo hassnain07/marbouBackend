@@ -1,6 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, AdminRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+
+/** Columns returned on list/get operations — no sensitive fields. */
+const ADMIN_USER_SELECT = {
+  id: true,
+  email: true,
+  fullName: true,
+  role: true,
+  isActive: true,
+  totpEnabledAt: true,
+  lastLoginAt: true,
+  lastLoginIp: true,
+  createdAt: true,
+} as const;
 
 @Injectable()
 export class AdminAuthRepository {
@@ -17,27 +30,14 @@ export class AdminAuthRepository {
   }
 
   async findByIdForList(id: string) {
-    return this.prisma.adminUser.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        email: true,
-        fullName: true,
-        role: true,
-        isActive: true,
-        totpEnabledAt: true,
-        lastLoginAt: true,
-        lastLoginIp: true,
-        createdAt: true,
-      },
-    });
+    return this.prisma.adminUser.findUnique({ where: { id }, select: ADMIN_USER_SELECT });
   }
 
   async createAdmin(data: {
     email: string;
     passwordHash: string;
     fullName: string;
-    role: string;
+    role: AdminRole;
     ipAllowList?: string[];
   }) {
     return this.prisma.adminUser.create({
@@ -45,7 +45,7 @@ export class AdminAuthRepository {
         email: data.email,
         passwordHash: data.passwordHash,
         fullName: data.fullName,
-        role: data.role as import('@prisma/client').AdminRole,
+        role: data.role,
         ipAllowList: data.ipAllowList ?? [],
         isActive: true,
         totpSecret: null,
@@ -57,6 +57,18 @@ export class AdminAuthRepository {
 
   async updateAdmin(id: string, data: Prisma.AdminUserUpdateInput) {
     return this.prisma.adminUser.update({ where: { id }, data });
+  }
+
+  async listAdmins(limit: number, cursor?: string) {
+    const rows = await this.prisma.adminUser.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit + 1,
+      select: ADMIN_USER_SELECT,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    const hasMore = rows.length > limit;
+    if (hasMore) rows.pop();
+    return { items: rows, nextCursor: hasMore ? rows[rows.length - 1]?.id ?? null : null };
   }
 
   // ── Sessions ──────────────────────────────────────────────────────────────
@@ -106,11 +118,13 @@ export class AdminAuthRepository {
     });
   }
 
-  async replaceSession(oldId: string, newId: string) {
-    return this.prisma.adminSession.update({
-      where: { id: oldId },
-      data: { replacedById: newId },
+  /** Get all active session IDs belonging to a token family (for reuse-revoke). */
+  async getFamilySessionIds(familyId: string): Promise<string[]> {
+    const sessions = await this.prisma.adminSession.findMany({
+      where: { familyId, revokedAt: null },
+      select: { id: true },
     });
+    return sessions.map((s) => s.id);
   }
 
   async listSessions(filter: { adminId?: string; activeOnly?: boolean }, limit: number, cursor?: string) {
@@ -122,10 +136,14 @@ export class AdminAuthRepository {
       orderBy: { createdAt: 'desc' },
       take: limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: {
+        id: true, adminId: true, familyId: true, ip: true, userAgent: true,
+        createdAt: true, expiresAt: true, revokedAt: true, revokedReason: true, replacedById: true,
+      },
     });
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
-    return { items: rows, nextCursor: hasMore ? rows[rows.length - 1]?.id : null };
+    return { items: rows, nextCursor: hasMore ? rows[rows.length - 1]?.id ?? null : null };
   }
 
   // ── Login logs ─────────────────────────────────────────────────────────────
@@ -169,30 +187,26 @@ export class AdminAuthRepository {
     });
     const hasMore = rows.length > limit;
     if (hasMore) rows.pop();
-    return { items: rows, nextCursor: hasMore ? rows[rows.length - 1].id.toString() : null };
+    return {
+      items: rows.map((r) => ({ ...r, id: r.id.toString() })),
+      nextCursor: hasMore ? rows[rows.length - 1]?.id.toString() ?? null : null,
+    };
   }
 
-  /** Count active Super Admins (race-safe with a row lock — see service). */
-  async countActiveSuperAdminsInTx(tx: Prisma.TransactionClient): Promise<number> {
-    return tx.adminUser.count({
-      where: { role: 'SUPER_ADMIN', isActive: true },
-    });
-  }
+  // ── Guard helper ──────────────────────────────────────────────────────────
 
   /**
    * Validate session and admin for JWT guard (A2, A11).
-   * Returns role and ipAllowList if valid, null otherwise.
    * Checks: session exists, not revoked, not expired, admin active.
    */
   async validateSessionAndAdmin(
     sessionId: string,
     adminId: string,
-  ): Promise<{ role: import('@prisma/client').AdminRole; ipAllowList: string[] } | null> {
+  ): Promise<{ role: AdminRole; ipAllowList: string[] } | null> {
     const session = await this.prisma.adminSession.findUnique({
       where: { id: sessionId },
       select: { revokedAt: true, expiresAt: true },
     });
-
     if (!session) return null;
     if (session.revokedAt) return null;
     if (session.expiresAt.getTime() < Date.now()) return null;
@@ -201,40 +215,28 @@ export class AdminAuthRepository {
       where: { id: adminId },
       select: { isActive: true, role: true, ipAllowList: true },
     });
-
     if (!admin || !admin.isActive) return null;
 
-    return {
-      role: admin.role,
-      ipAllowList: admin.ipAllowList,
-    };
+    return { role: admin.role, ipAllowList: admin.ipAllowList };
   }
+
+  // ── Atomic operations ─────────────────────────────────────────────────────
 
   /**
    * Atomically claim a session for refresh rotation (A4).
-   * Returns the count of updated rows (should be 1).
-   * Only updates if session is not yet revoked.
+   * Returns count of updated rows (1 = success, 0 = already revoked/reuse).
    */
   async claimSessionForRefresh(sessionId: string, replacedById: string): Promise<number> {
     const result = await this.prisma.adminSession.updateMany({
-      where: {
-        id: sessionId,
-        revokedAt: null,
-      },
-      data: {
-        revokedAt: new Date(),
-        revokedReason: 'Rotated',
-        replacedById,
-      },
+      where: { id: sessionId, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: 'Rotated', replacedById },
     });
-
     return result.count;
   }
 
   /**
    * Atomically update TOTP last step to prevent replay (A4).
-   * Returns the count of updated rows (should be 1 if step is fresh).
-   * Only updates if lastTotpStep is null or less than the new step.
+   * Returns count of updated rows (1 = fresh, 0 = replay).
    */
   async updateTotpStepIfFresh(adminId: string, newStep: bigint): Promise<number> {
     const result = await this.prisma.adminUser.updateMany({
@@ -242,63 +244,35 @@ export class AdminAuthRepository {
         id: adminId,
         OR: [{ lastTotpStep: null }, { lastTotpStep: { lt: newStep } }],
       },
-      data: {
-        lastTotpStep: newStep,
-      },
+      data: { lastTotpStep: newStep },
     });
-
     return result.count;
   }
 
-  /**
-   * Get all active session IDs for an admin (for bulk invalidation, A1).
-   */
+  // ── Bulk session operations ───────────────────────────────────────────────
+
+  /** Get all active session IDs for an admin (for bulk invalidation). */
   async getActiveSessionIds(adminId: string): Promise<string[]> {
     const sessions = await this.prisma.adminSession.findMany({
       where: { adminId, revokedAt: null },
       select: { id: true },
     });
-
     return sessions.map((s) => s.id);
   }
 
-  /**
-   * Revoke all sessions for an admin (A1).
-   * Returns the IDs of revoked sessions for cache invalidation.
-   */
+  /** Revoke all active sessions for an admin, return their IDs. */
   async revokeAllAdminSessions(adminId: string, reason: string): Promise<string[]> {
     const sessionIds = await this.getActiveSessionIds(adminId);
-
-    await this.prisma.adminSession.updateMany({
-      where: { adminId, revokedAt: null },
-      data: { revokedAt: new Date(), revokedReason: reason },
-    });
-
+    if (sessionIds.length > 0) {
+      await this.prisma.adminSession.updateMany({
+        where: { adminId, revokedAt: null },
+        data: { revokedAt: new Date(), revokedReason: reason },
+      });
+    }
     return sessionIds;
   }
 
-  /**
-   * Lock all active Super Admin rows for update (A5).
-   * Must be called within a transaction.
-   * Returns the IDs of locked Super Admins.
-   */
-  async lockActiveSuperAdmins(tx: Prisma.TransactionClient): Promise<string[]> {
-    // Use raw SQL for SELECT ... FOR UPDATE to lock ALL SA rows, preventing
-    // concurrent demotions/deactivations from both passing the count check (A5).
-    const result = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT id 
-      FROM "AdminUser" 
-      WHERE role = 'SUPER_ADMIN' AND "isActive" = true 
-      ORDER BY id 
-      FOR UPDATE
-    `;
-
-    return result.map((r) => r.id);
-  }
-
-  /**
-   * Revoke all sessions for an admin and return their IDs (A1).
-   */
+  /** Revoke all active sessions for an admin inside a transaction, return their IDs. */
   async revokeAdminSessionsInTx(
     tx: Prisma.TransactionClient,
     adminId: string,
@@ -316,5 +290,18 @@ export class AdminAuthRepository {
       });
     }
     return ids;
+  }
+
+  /**
+   * Lock all active Super Admin rows for update (A5).
+   * Must be called within a transaction.
+   */
+  async lockActiveSuperAdmins(tx: Prisma.TransactionClient): Promise<string[]> {
+    const result = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "AdminUser"
+      WHERE role = 'SUPER_ADMIN' AND "isActive" = true
+      ORDER BY id FOR UPDATE
+    `;
+    return result.map((r) => r.id);
   }
 }

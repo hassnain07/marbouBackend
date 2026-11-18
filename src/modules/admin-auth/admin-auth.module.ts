@@ -11,8 +11,13 @@ import { PlatformModule } from '../platform/platform.module';
 
 @Module({
   imports: [PlatformModule],
-  controllers: [AdminAuthController, AdminUsersController, AdminSessionsController, AdminLoginLogsController],
+  controllers: [
+    AdminAuthController,
+    AdminUsersController,
+    AdminSessionsController,
+    AdminLoginLogsController,
+  ],
   providers: [AdminAuthService, AdminAuthRepository],
-  exports: [AdminAuthService],
+  exports: [AdminAuthService, AdminAuthRepository],
 })
 export class AdminAuthModule {}

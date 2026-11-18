@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuard
 import type { Request } from 'express';
 import { AdminRole } from '@prisma/client';
 import { AdminAuthRepository } from './admin-auth.repository';
-import { RedisService } from '../../redis/redis.service';
+import { AdminAuthService } from './admin-auth.service';
 import { AuditService } from '../platform/audit/audit.service';
 import { AuditActorType } from '../platform/audit/audit.constants';
 import { AdminJwtGuard, type AdminAuthContext, invalidateSessionCache } from '../../common/guards/admin-jwt.guard';
@@ -12,41 +12,40 @@ import { AppError } from '../../common/errors/app-error';
 import { ErrorCodes } from '../../common/errors/error-codes';
 import { hashPassword } from './argon2-params';
 import { z } from 'zod';
-import { PrismaService } from '../../prisma/prisma.service';
+
+// ── Schemas ────────────────────────────────────────────────────────────────
 
 const createAdminSchema = z.object({
   email: z.string().email().transform((v) => v.trim().toLowerCase()),
   fullName: z.string().min(1),
-  role: z.enum([AdminRole.SUPER_ADMIN, AdminRole.CONTENT_MODERATOR, AdminRole.SUPPORT_AGENT, AdminRole.FINANCIAL_AUDITOR]),
+  role: z.enum([
+    AdminRole.SUPER_ADMIN,
+    AdminRole.CONTENT_MODERATOR,
+    AdminRole.SUPPORT_AGENT,
+    AdminRole.FINANCIAL_AUDITOR,
+  ]),
   initialPassword: z.string().min(12, 'Password must be at least 12 characters'),
 });
 
 const patchAdminSchema = z.object({
-  role: z.enum([AdminRole.SUPER_ADMIN, AdminRole.CONTENT_MODERATOR, AdminRole.SUPPORT_AGENT, AdminRole.FINANCIAL_AUDITOR]).optional(),
+  role: z.enum([
+    AdminRole.SUPER_ADMIN,
+    AdminRole.CONTENT_MODERATOR,
+    AdminRole.SUPPORT_AGENT,
+    AdminRole.FINANCIAL_AUDITOR,
+  ]).optional(),
   isActive: z.boolean().optional(),
   ipAllowList: z.array(z.string()).optional(),
 });
 
-/** Select shape for list/get operations — no sensitive fields. */
-const ADMIN_USER_SELECT = {
-  id: true,
-  email: true,
-  fullName: true,
-  role: true,
-  isActive: true,
-  totpEnabledAt: true,
-  lastLoginAt: true,
-  lastLoginIp: true,
-  createdAt: true,
-} as const;
+// ── AdminUsersController ─────────────────────────────────────────────────────
 
 @Controller('api/v1/admin/admin-users')
 @UseGuards(AdminJwtGuard)
 export class AdminUsersController {
   constructor(
     private readonly repo: AdminAuthRepository,
-    private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
+    private readonly svc: AdminAuthService,
     private readonly audit: AuditService,
   ) {}
 
@@ -54,54 +53,26 @@ export class AdminUsersController {
   @AdminPermission('admin.users.manage')
   async list(@Query('cursor') cursor?: string, @Query('limit') limit?: string) {
     const take = Math.min(Number(limit ?? 20) || 20, 100);
-    const rows = await this.prisma.adminUser.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: take + 1,
-      select: ADMIN_USER_SELECT,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    });
-    const hasMore = rows.length > take;
-    if (hasMore) rows.pop();
-    return {
-      items: rows,
-      __pagination: {
-        nextCursor: hasMore ? rows[rows.length - 1]?.id : null,
-        limit: take,
-      },
-    };
+    return this.repo.listAdmins(take, cursor);
   }
 
-  /** A11: GET /admin/admin-users/:id — SA only, 404 if unknown. */
   @Get(':id')
   @AdminPermission('admin.users.manage')
   async getById(@Param('id') id: string) {
-    const admin = await this.prisma.adminUser.findUnique({
-      where: { id },
-      select: ADMIN_USER_SELECT,
-    });
-    if (!admin) {
-      throw AppError.notFound(ErrorCodes.NOT_FOUND, 'Admin not found');
-    }
+    const admin = await this.repo.findByIdForList(id);
+    if (!admin) throw AppError.notFound(ErrorCodes.NOT_FOUND, 'Admin not found');
     return admin;
   }
 
   @Post()
   @AdminPermission('admin.users.manage')
   async create(
-    @Body(zodPipe(createAdminSchema)) body: {
-      email: string;
-      fullName: string;
-      role: AdminRole;
-      initialPassword: string;
-    },
+    @Body(zodPipe(createAdminSchema)) body: z.output<typeof createAdminSchema>,
     @Req() req: Request & { admin: AdminAuthContext },
   ) {
-    // A7: email is already normalized by the schema transform
     const existing = await this.repo.findByEmail(body.email);
-    if (existing) {
-      throw AppError.conflict(ErrorCodes.ADM_EMAIL_EXISTS);
-    }
-    // A7: Use centralized Argon2 params (same as login)
+    if (existing) throw AppError.conflict(ErrorCodes.ADM_EMAIL_EXISTS);
+
     const passwordHash = await hashPassword(body.initialPassword);
     const admin = await this.repo.createAdmin({
       email: body.email,
@@ -124,44 +95,33 @@ export class AdminUsersController {
   @AdminPermission('admin.users.manage')
   async patch(
     @Param('id') id: string,
-    @Body(zodPipe(patchAdminSchema)) body: {
-      role?: AdminRole;
-      isActive?: boolean;
-      ipAllowList?: string[];
-    },
+    @Body(zodPipe(patchAdminSchema)) body: z.output<typeof patchAdminSchema>,
     @Req() req: Request & { admin: AdminAuthContext },
   ) {
-    const existing = await this.prisma.adminUser.findUnique({ where: { id } });
-    if (!existing) {
-      throw AppError.notFound(ErrorCodes.NOT_FOUND, 'Admin not found');
-    }
-    // A9: Don't put ipAllowList values in before/after; record change indicator only
-    const before = {
-      role: existing.role,
-      isActive: existing.isActive,
-      ...(existing.ipAllowList !== undefined
-        ? { ipAllowListChanged: false, ipAllowListCount: existing.ipAllowList.length }
-        : {}),
-    };
+    const existing = await this.repo.findById(id);
+    if (!existing) throw AppError.notFound(ErrorCodes.NOT_FOUND, 'Admin not found');
 
-    // A5: Last-super-admin guard with ALL SA rows locked
-    const { result, revokedSessionIds } = await this.prisma.$transaction(async (tx) => {
-      // Lock ALL active Super Admin rows to prevent concurrent demotions (A5)
-      const saIds = await tx.$queryRaw<{ id: string }[]>`
+    // A9: audit before — no raw ipAllowList values
+    const before: Record<string, unknown> = { role: existing.role, isActive: existing.isActive };
+    if (body.ipAllowList !== undefined) {
+      before.ipAllowListChanged = false;
+      before.ipAllowListCount = existing.ipAllowList.length;
+    }
+
+    // A5: Last-SA lock + update in one transaction
+    const { result, revokedSessionIds } = await this.repo['prisma'].$transaction(async (tx: import('@prisma/client').Prisma.TransactionClient) => {
+      // Lock ALL active SA rows first (A5)
+      const saRows = await tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM "AdminUser"
         WHERE role = 'SUPER_ADMIN' AND "isActive" = true
         ORDER BY id FOR UPDATE
       `;
 
-      const isCurrentlySa = existing.role === 'SUPER_ADMIN' && existing.isActive;
+      const isCurrentlySa = existing.role === AdminRole.SUPER_ADMIN && existing.isActive;
       const wouldDemote = body.role !== undefined && body.role !== AdminRole.SUPER_ADMIN;
       const wouldDeactivate = body.isActive === false;
-
-      if (isCurrentlySa && (wouldDemote || wouldDeactivate)) {
-        // saIds already has the locked count
-        if (saIds.length <= 1) {
-          throw AppError.conflict(ErrorCodes.ADM_LAST_SUPER_ADMIN);
-        }
+      if (isCurrentlySa && (wouldDemote || wouldDeactivate) && saRows.length <= 1) {
+        throw AppError.conflict(ErrorCodes.ADM_LAST_SUPER_ADMIN);
       }
 
       const data: Record<string, unknown> = {};
@@ -175,48 +135,49 @@ export class AdminUsersController {
         select: { id: true, role: true, isActive: true, ipAllowList: true },
       });
 
-      // A1: Revoke sessions in the same transaction for role change or deactivation
+      // Revoke sessions inside transaction if role changed or deactivated
       let revokedIds: string[] = [];
       if (body.role !== undefined || body.isActive === false) {
         const reason = body.isActive === false ? 'deactivated' : 'role changed';
         revokedIds = await this.repo.revokeAdminSessionsInTx(tx, id, reason);
       }
-
       return { result: updated, revokedSessionIds: revokedIds };
     });
 
-    // A1: Invalidate Redis cache for all revoked sessions AFTER transaction commits
+    // A1: invalidate cache after transaction
     if (revokedSessionIds.length > 0) {
-      await invalidateSessionCache(this.redis, ...revokedSessionIds);
+      await invalidateSessionCache(this.svc['redis'], ...revokedSessionIds);
     }
 
-    // A9: Audit — no raw ipAllowList values
+    // Post-revocation audit via service (keeps single code path for audit events)
+    if (body.isActive === false && revokedSessionIds.length >= 0) {
+      await this.svc.deactivateAdmin(req.admin.id, id, revokedSessionIds);
+    } else if (body.role !== undefined && revokedSessionIds.length >= 0) {
+      await this.svc.changeAdminRole(req.admin.id, id, result.role, revokedSessionIds);
+    }
+
     const after: Record<string, unknown> = { role: result.role, isActive: result.isActive };
     if (body.ipAllowList !== undefined) {
       after.ipAllowListChanged = true;
       after.ipAllowListCount = result.ipAllowList.length;
     }
-
     await this.audit.record({
-      actorType: AuditActorType.ADMIN,
-      actorId: req.admin.id,
-      action: 'admin.user.patched',
-      entity: 'AdminUser',
-      entityId: id,
-      before,
-      after,
+      actorType: AuditActorType.ADMIN, actorId: req.admin.id,
+      action: 'admin.user.patched', entity: 'AdminUser', entityId: id,
+      before, after,
     });
     return result;
   }
 }
 
+// ── AdminSessionsController ───────────────────────────────────────────────────
+
 @Controller('api/v1/admin/admin-sessions')
 @UseGuards(AdminJwtGuard)
 export class AdminSessionsController {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
-    private readonly audit: AuditService,
+    private readonly repo: AdminAuthRepository,
+    private readonly svc: AdminAuthService,
   ) {}
 
   @Get()
@@ -228,56 +189,27 @@ export class AdminSessionsController {
     @Query('limit') limit?: string,
   ) {
     const take = Math.min(Number(limit ?? 20) || 20, 100);
-    const where: Record<string, unknown> = {};
-    if (adminId) where.adminId = adminId;
-    if (activeOnly === 'true') where.revokedAt = null;
-    const rows = await this.prisma.adminSession.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      take: take + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    });
-    const hasMore = rows.length > take;
-    if (hasMore) rows.pop();
-    return {
-      items: rows.map((r) => ({ ...r, refreshTokenHash: undefined })),
-      __pagination: { nextCursor: hasMore ? rows[rows.length - 1]?.id : null, limit: take },
-    };
+    return this.repo.listSessions(
+      { adminId, activeOnly: activeOnly === 'true' },
+      take,
+      cursor,
+    );
   }
 
-  /** A1: DELETE /admin-sessions/:id — 404 on unknown id, invalidate cache. */
   @Delete(':id')
   @AdminPermission('admin.sessions.manage')
   async revoke(@Param('id') id: string, @Req() req: Request & { admin: AdminAuthContext }) {
-    // A1: Check existence first → 404 not 500 on unknown id
-    const session = await this.prisma.adminSession.findUnique({ where: { id } });
-    if (!session) {
-      throw AppError.notFound(ErrorCodes.NOT_FOUND, 'Session not found');
-    }
-
-    await this.prisma.adminSession.update({
-      where: { id },
-      data: { revokedAt: new Date(), revokedReason: 'revoked by admin' },
-    });
-
-    // A1: Invalidate cache immediately
-    await invalidateSessionCache(this.redis, id);
-
-    await this.audit.record({
-      actorType: AuditActorType.ADMIN,
-      actorId: req.admin.id,
-      action: 'admin.session.revoked',
-      entity: 'AdminSession',
-      entityId: id,
-    });
+    await this.svc.revokeSessionById(req.admin.id, id);
     return { revoked: true };
   }
 }
 
+// ── AdminLoginLogsController ──────────────────────────────────────────────────
+
 @Controller('api/v1/admin/admin-login-logs')
 @UseGuards(AdminJwtGuard)
 export class AdminLoginLogsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly repo: AdminAuthRepository) {}
 
   @Get()
   @AdminPermission('admin.login-logs.read')
@@ -288,20 +220,6 @@ export class AdminLoginLogsController {
     @Query('limit') limit?: string,
   ) {
     const take = Math.min(Number(limit ?? 20) || 20, 100);
-    const where: Record<string, unknown> = {};
-    if (adminId) where.adminId = adminId;
-    if (outcome) where.outcome = outcome;
-    const rows = await this.prisma.adminLoginLog.findMany({
-      where,
-      orderBy: { id: 'desc' },
-      take: take + 1,
-      ...(cursor ? { cursor: { id: BigInt(cursor) }, skip: 1 } : {}),
-    });
-    const hasMore = rows.length > take;
-    if (hasMore) rows.pop();
-    return {
-      items: rows.map((r) => ({ ...r, id: r.id.toString() })),
-      __pagination: { nextCursor: hasMore ? rows[rows.length - 1]?.id.toString() : null, limit: take },
-    };
+    return this.repo.listLoginLogs({ adminId, outcome }, take, cursor);
   }
 }

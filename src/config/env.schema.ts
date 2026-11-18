@@ -25,7 +25,7 @@ const envSchema = z
 
     ADMIN_JWT_SECRET: z.string().min(32, 'ADMIN_JWT_SECRET must be at least 32 chars'),
     ADMIN_JWT_ACCESS_TTL: z.string().default('15m'),
-    ADMIN_JWT_REFRESH_TTL: z.string().default('30d'),
+    ADMIN_JWT_REFRESH_TTL: z.string().default('12h'),
     ADMIN_TOTP_ENC_KEY: z.string().min(32, 'ADMIN_TOTP_ENC_KEY must be at least 32 chars'),
 
     // Phase 2: Super Admin seed credentials (no bootstrap backdoor).
