@@ -43,12 +43,13 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       map((payload) => {
-        // ETagInterceptor has set 304 on the response — end with empty body.
+        // ETagInterceptor has set 304 on the response — return an empty string
+        // so NestJS calls res.send('') which Express handles cleanly for 304
+        // (it removes Content-Type/Length BEFORE sending, so no ERR_HTTP_HEADERS_SENT).
+        // We must NOT call res.end() here — that sends headers and makes NestJS's
+        // subsequent res.send() crash trying to remove them.
         if (payload === ETAG_304_SENTINEL) {
-          if (!res.headersSent) {
-            res.end();
-          }
-          return undefined;
+          return '';
         }
 
         if (res.headersSent) return payload;

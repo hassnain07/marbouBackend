@@ -585,6 +585,111 @@
       "description": "Phase 1: Feature flags, remote config, defaults register, audit log.\nAll admin requests use JWT authorization (Bearer token).\nMutating requests revert state so the folder is re-runnable.",
       "item": [
         {
+          "name": "00 Login SA (auto)",
+          "description": "Logs in the SA admin and stores adminSa_token. Run this folder first.",
+          "item": [
+            {
+              "name": "SA login step 1 (password)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"201\", () => pm.response.to.have.status(201));",
+                      "const b = pm.response.json();",
+                      "pm.test(\"mfaToken present\", () => pm.expect(b.data.mfaToken).to.be.a(\"string\").and.not.empty);",
+                      "pm.environment.set(\"_p01_sa_mfaToken\", b.data.mfaToken);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"email\":\"{{adminSa_email}}\",\"password\":\"{{adminPassword}}\"}"
+                },
+                "url": "{{baseUrl}}/api/v1/admin/auth/login"
+              }
+            },
+            {
+              "name": "SA get TOTP code",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"200\", () => pm.response.to.have.status(200));",
+                      "pm.test(\"code is 6 digits\", () => pm.expect(pm.response.json().data.code).to.match(/^\\d{6}$/));",
+                      "pm.environment.set(\"_p01_sa_totpCode\", pm.response.json().data.code);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/dev/admin/totp?email={{adminSa_email}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "dev",
+                    "admin",
+                    "totp"
+                  ],
+                  "query": [
+                    {
+                      "key": "email",
+                      "value": "{{adminSa_email}}"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "SA verify TOTP -> store token",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"201\", () => pm.response.to.have.status(201));",
+                      "const b = pm.response.json();",
+                      "pm.test(\"accessToken present\", () => pm.expect(b.data.accessToken).to.be.a(\"string\").and.not.empty);",
+                      "pm.environment.set(\"adminSa_token\", b.data.accessToken);",
+                      "pm.environment.set(\"adminSa_refreshToken\", b.data.refreshToken);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"mfaToken\":\"{{_p01_sa_mfaToken}}\",\"code\":\"{{_p01_sa_totpCode}}\"}"
+                },
+                "url": "{{baseUrl}}/api/v1/admin/auth/2fa/verify"
+              }
+            }
+          ]
+        },
+        {
           "name": "Config",
           "item": [
             {

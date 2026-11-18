@@ -11,8 +11,11 @@
 import { type INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { createApp } from '../src/bootstrap';
+import { PrismaService } from '../src/prisma/prisma.service';
+import { RedisService } from '../src/redis/redis.service';
 import { hotp, currentTotpStep } from '../src/common/utils/totp';
 import { DEV_TOTP_SECRETS } from '../src/modules/admin-auth/dev-totp-secrets';
+import { resetDevState } from './helpers/reset-state';
 
 const ADMIN_EMAIL = 'sa@dev.marbou.test';
 const ADMIN_PASSWORD = process.env.ADMIN_SEED_PASSWORD ?? 'ChangeMe!2026#';
@@ -41,8 +44,8 @@ async function getAdminToken(agent: ReturnType<typeof request>): Promise<string>
   if (verify.status !== 200 && verify.status !== 201) {
     throw new Error(`2FA verify failed with status ${verify.status}: ${JSON.stringify(verify.body)}`);
   }
-  ACCESS_TOKEN = verify.body.data.accessToken;
-  return ACCESS_TOKEN;
+  ACCESS_TOKEN = verify.body.data.accessToken as string;
+  return ACCESS_TOKEN as string;
 }
 
 describe('Phase 1 — Platform Services (e2e)', () => {
@@ -53,10 +56,12 @@ describe('Phase 1 — Platform Services (e2e)', () => {
   beforeAll(async () => {
     app = await createApp();
     await app.init();
+    // Reset dev accounts so TOTP replay and lockout state from other suites don't interfere
+    await resetDevState(app.get(PrismaService), app.get(RedisService));
     http = request(app.getHttpServer());
     // Get admin access token once for the entire suite
     adminToken = await getAdminToken(http);
-  }, 20000);
+  }, 60000);
 
   afterAll(async () => {
     await app.close();

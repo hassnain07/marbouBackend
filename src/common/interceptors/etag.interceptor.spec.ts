@@ -47,7 +47,7 @@ describe('ETagInterceptor', () => {
     const result = await lastValueFrom(interceptor.intercept(ctx, { handle: () => of(payload) }));
     expect(ctx._res._status).toBe(304);
     // The ETag interceptor returns the sentinel; the ResponseEnvelopeInterceptor
-    // is responsible for calling res.end() when it sees this sentinel.
+    // converts it to an empty string so NestJS sends a clean 304.
     expect(result).toBe(ETAG_304_SENTINEL);
   });
 

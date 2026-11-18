@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "strictPropertyInitialization": false
+  },
+  "include": ["src/**/*.ts", "prisma/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

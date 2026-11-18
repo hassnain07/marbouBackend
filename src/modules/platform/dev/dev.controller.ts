@@ -74,7 +74,10 @@ export class DevController {
 
   /**
    * Dev-only: return the current valid TOTP code for an admin email.
-   * Used by Postman/e2e to log in dev accounts automatically.
+   * Also resets lastTotpStep to null so the same code can be used again within
+   * the same 30-second window without hitting the replay guard. This is dev/test
+   * only — the production login path (verifyTotp + updateTotpStepIfFresh) is
+   * unchanged.
    * GET /dev/admin/totp?email=sa@dev.marbou.test
    */
   @Get('admin/totp')
@@ -87,9 +90,15 @@ export class DevController {
       throw AppError.notFound(ErrorCodes.NOT_FOUND, `Admin or TOTP secret not found for ${email}`);
     }
     const secret = aesDecrypt(admin.totpSecret);
-    // Import HOTP to avoid circular deps at module level
     const { hotp, currentTotpStep } = await import('../../../common/utils/totp');
     const code = hotp(secret, currentTotpStep());
+    // Reset lastTotpStep so the same step can be used again in test environments
+    // without hitting the TOTP_REPLAY guard. Only the dev endpoint does this —
+    // the production verifyTotp path is unaffected.
+    await this.prisma.adminUser.update({
+      where: { email },
+      data: { lastTotpStep: null },
+    });
     return { code, email };
   }
 

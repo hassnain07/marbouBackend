@@ -34,3 +34,8 @@ for (const [key, value] of Object.entries(defaults)) {
     process.env[key] = value;
   }
 }
+
+// Always override rate-limit auth cap in test so repeated auth calls
+// (up to 1000/min) never hit the limiter. This must be set AFTER the
+// dotenv/defaults loop so it wins regardless of .env content.
+process.env.RATE_LIMIT_AUTH_PER_MINUTE = '1000';
