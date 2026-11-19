@@ -43,6 +43,11 @@ const CATALOG: Catalog = {
     ar: 'لا يمكن إيقاف آخر قناة تفعيل',
     en: 'The last verification channel cannot be disabled',
   },
+  AUTH_OTP_COOLDOWN: { ar: 'انتظر قبل طلب رمز جديد', en: 'Please wait before requesting a new code' },
+  AUTH_PHONE_INVALID: { ar: 'رقم الهاتف غير صالح', en: 'Invalid phone number' },
+  AUTH_PHONE_EXISTS: { ar: 'رقم الهاتف مؤكد ومستخدم بالفعل', en: 'This phone number is already verified and in use' },
+  AUTH_SESSION_NOT_FOUND: { ar: 'الجلسة غير موجودة', en: 'Session not found' },
+  AUTH_SOCIAL_TOKEN_INVALID: { ar: 'رمز المزود غير صالح', en: 'Invalid provider token' },
 
   PROF_CAPABILITY_EXISTS: { ar: 'الصلاحية ممنوحة بالفعل', en: 'Capability already granted' },
   PROF_BLOCK_EXISTS: { ar: 'تم حظر المستخدم مسبقا', en: 'User is already blocked' },

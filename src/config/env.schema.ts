@@ -32,6 +32,21 @@ const envSchema = z
     ADMIN_SEED_EMAIL: z.string().email().default('admin@marbou.test'),
     ADMIN_SEED_PASSWORD: z.string().min(12, 'ADMIN_SEED_PASSWORD must be at least 12 chars').default('ChangeMe!2026#'),
 
+    // Phase 3: OTP code hashing (HMAC-SHA256 key, never the plaintext in DB)
+    OTP_HASH_SECRET: z.string().min(32, 'OTP_HASH_SECRET must be at least 32 chars').default('dev-otp-hash-secret-change-in-production'),
+
+    // Phase 3: Social provider credentials (server-side token verification)
+    GOOGLE_CLIENT_IDS: z.string().optional(), // comma-separated OAuth2 client IDs
+    FACEBOOK_APP_ID: z.string().optional(),
+    FACEBOOK_APP_SECRET: z.string().optional(),
+    APPLE_CLIENT_ID: z.string().optional(),   // Service ID for Sign in with Apple
+    APPLE_TEAM_ID: z.string().optional(),
+    APPLE_KEY_ID: z.string().optional(),
+    APPLE_PRIVATE_KEY_PATH: z.string().optional(),
+
+    // Phase 3: GeoIP (optional, MaxMind DB path)
+    GEOIP_DB_PATH: z.string().optional(),
+
     // Trusted proxy configuration for IP extraction (A6).
     TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 
@@ -54,14 +69,6 @@ const envSchema = z
     SMTP_FROM: z.string().optional(),
 
     FCM_CREDENTIALS_JSON: z.string().optional(),
-
-    GOOGLE_CLIENT_IDS: z.string().optional(),
-    FACEBOOK_APP_ID: z.string().optional(),
-    FACEBOOK_APP_SECRET: z.string().optional(),
-    APPLE_CLIENT_ID: z.string().optional(),
-    APPLE_TEAM_ID: z.string().optional(),
-    APPLE_KEY_ID: z.string().optional(),
-    APPLE_PRIVATE_KEY_PATH: z.string().optional(),
 
     GOOGLE_MAPS_SERVER_KEY: z.string().optional(),
     MAPS_DAILY_CAP: z.coerce.number().int().positive().default(250),
@@ -120,6 +127,16 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           message: 'ADMIN_TOTP_ENC_KEY must not contain "change-me" in staging/production',
           path: ['ADMIN_TOTP_ENC_KEY'],
+        });
+      }
+
+      // OTP_HASH_SECRET must not be the placeholder in staging/production
+      if (env.OTP_HASH_SECRET.toLowerCase().includes('change-in-production') ||
+          env.OTP_HASH_SECRET.toLowerCase().includes('dev-otp')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'OTP_HASH_SECRET must be set to a secure value in staging/production',
+          path: ['OTP_HASH_SECRET'],
         });
       }
 

@@ -1,13 +1,15 @@
-import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
+﻿import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { DefaultsService } from '../defaults.service';
 import { AdminJwtGuard, type AdminAuthContext } from '../../../../common/guards/admin-jwt.guard';
+import { Public } from '../../../../common/decorators/public.decorator';
 import { AdminPermission } from '../../../../common/decorators/admin-permission.decorator';
 import { zodPipe } from '../../../../common/pipes/zod-validation.pipe';
 import { patchDefaultSchema } from '../dto/patch-default.dto';
 
-/** Admin defaults controller — requires @AdminPermission (Phase 2 guard). */
+/** Admin defaults controller â€” requires @AdminPermission (Phase 2 guard). */
 @Controller('api/v1/admin/defaults')
+@Public()
 @UseGuards(AdminJwtGuard)
 export class DefaultsAdminController {
   constructor(private readonly defaults: DefaultsService) {}
@@ -27,3 +29,4 @@ export class DefaultsAdminController {
     return this.defaults.patch(body.key, body.value, req.admin.id);
   }
 }
+

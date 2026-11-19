@@ -1,13 +1,15 @@
-import { Controller, Get, Param, Patch, Body, Req, UseGuards } from '@nestjs/common';
+﻿import { Controller, Get, Param, Patch, Body, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { FeatureFlagsService } from '../feature-flags.service';
 import { AdminJwtGuard, type AdminAuthContext } from '../../../../common/guards/admin-jwt.guard';
+import { Public } from '../../../../common/decorators/public.decorator';
 import { AdminPermission } from '../../../../common/decorators/admin-permission.decorator';
 import { zodPipe } from '../../../../common/pipes/zod-validation.pipe';
 import { patchFlagSchema } from '../dto/patch-flag.dto';
 
-/** Admin flags controller — requires @AdminPermission (Phase 2 guard). */
+/** Admin flags controller â€” requires @AdminPermission (Phase 2 guard). */
 @Controller('api/v1/admin/flags')
+@Public()
 @UseGuards(AdminJwtGuard)
 export class FeatureFlagsAdminController {
   constructor(private readonly flags: FeatureFlagsService) {}
@@ -22,7 +24,7 @@ export class FeatureFlagsAdminController {
   @AdminPermission('config.flags.read')
   async getHistory(@Param('key') key: string) {
     const rows = await this.flags.getHistory(key);
-    // Serialise BigInt id to string — JSON.stringify cannot handle BigInt natively.
+    // Serialise BigInt id to string â€” JSON.stringify cannot handle BigInt natively.
     return rows.map((r) => ({ ...r, id: r.id.toString() }));
   }
 
@@ -36,3 +38,4 @@ export class FeatureFlagsAdminController {
     return this.flags.patch(key, body, req.admin.id);
   }
 }
+

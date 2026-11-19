@@ -2,6 +2,7 @@
  *  idempotent, retry with backoff, and dead-letter after max attempts (SYS-03). */
 export const QueueName = {
   ECHO: 'echo', // Phase 0 smoke processor
+  EMAIL: 'email', // Phase 3: transactional email (OTP, notices) via EmailPort
   SCAN: 'scan', // keyword/blacklist/dup-image/dup-text/classifier scan (Phase 13)
   SEARCH_INDEX: 'search-index', // refresh normalized text / promoted columns (Phase 9)
   EXPIRY: 'expiry', // expire listings/jobs; 7d & 1d reminders (Phase 8)

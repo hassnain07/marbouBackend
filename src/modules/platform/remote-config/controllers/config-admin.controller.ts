@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
+﻿import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { RemoteConfigService } from '../remote-config.service';
 import { AdminJwtGuard, type AdminAuthContext } from '../../../../common/guards/admin-jwt.guard';
+import { Public } from '../../../../common/decorators/public.decorator';
 import { AdminPermission } from '../../../../common/decorators/admin-permission.decorator';
 import { zodPipe } from '../../../../common/pipes/zod-validation.pipe';
 import { patchMaintenanceSchema } from '../dto/patch-maintenance.dto';
@@ -9,8 +10,9 @@ import { patchAppVersionsSchema } from '../dto/patch-app-versions.dto';
 import { patchMediaLimitsSchema } from '../dto/patch-media-limits.dto';
 import { Audit } from '../../../../common/decorators/audit.decorator';
 
-/** Admin config controller — requires @AdminPermission (Phase 2 guard). */
+/** Admin config controller â€” requires @AdminPermission (Phase 2 guard). */
 @Controller('api/v1/admin')
+@Public()
 @UseGuards(AdminJwtGuard)
 export class ConfigAdminController {
   constructor(private readonly rc: RemoteConfigService) {}
@@ -60,3 +62,4 @@ export class ConfigAdminController {
     );
   }
 }
+

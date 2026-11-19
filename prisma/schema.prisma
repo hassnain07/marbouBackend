@@ -182,15 +182,100 @@ model Session {
   userId         String
   user           User      @relation(fields: [userId], references: [id])
   familyId       String // refresh-token family for reuse detection
-  refreshHash    String
+  refreshHash    String    @unique // SHA-256 of the opaque refresh token
   deviceName     String?
   os             String?
   approxLocation String?
+  ip             String?
+  userAgent      String?
+  deviceId       String?
+  expiresAt      DateTime?
+  revokedReason  String?
   lastActiveAt   DateTime  @default(now())
   revokedAt      DateTime?
   createdAt      DateTime  @default(now())
-  @@index([userId])
+  @@index([userId, revokedAt])
   @@index([familyId])
+  @@index([refreshHash])
+}
+
+// ── Customer auth (Phase 3) ───────────────────────────────────────────────────
+
+enum OtpPurpose {
+  REGISTER
+  RESET
+  CHANGE_EMAIL
+  PHONE
+}
+
+enum OtpChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum LoginOutcome {
+  SUCCESS
+  BAD_PASSWORD
+  LOCKED
+  SUSPENDED
+  EMAIL_NOT_VERIFIED
+  SOCIAL_SUCCESS
+  SOCIAL_FAILED
+}
+
+enum FunnelStep {
+  REGISTER_STARTED
+  OTP_SENT
+  OTP_DELIVERED
+  OTP_DELIVERY_FAILED
+  OTP_VERIFIED
+}
+
+/** OTP codes — stored only as HMAC-SHA256 hash, never plaintext. */
+model OtpCode {
+  id             String     @id @default(uuid())
+  userId         String? // null for unverified registrations (account not yet created)
+  email          String? // target email (lowercase)
+  purpose        OtpPurpose
+  channel        OtpChannel @default(EMAIL)
+  codeHash       String // HMAC-SHA256(code, OTP_HASH_SECRET)
+  attempts       Int        @default(0) // bad-attempt counter; max AUTH_OTP_MAX_ATTEMPTS
+  expiresAt      DateTime // AUTH_OTP_EXPIRY_MINUTES from creation
+  consumedAt     DateTime? // set when successfully verified (single-use)
+  createdAt      DateTime   @default(now())
+  lastSentAt     DateTime   @default(now()) // updated on resend; used for cooldown check
+
+  @@index([email, purpose])
+  @@index([userId, purpose])
+}
+
+/** Login events — append-only security log (AUTH-10). Unknown emails stored as hash. */
+model LoginEvent {
+  id         BigInt       @id @default(autoincrement())
+  userId     String? // null when email was unknown
+  emailHash  String? // SHA-256 of the email when userId is null (no PII)
+  outcome    LoginOutcome
+  deviceName String?
+  os         String?
+  ip         String?
+  createdAt  DateTime     @default(now())
+
+  @@index([userId, createdAt])
+  @@index([outcome, createdAt])
+}
+
+/** Auth funnel events — capture registration/OTP delivery/verification metrics (AUTH-23). */
+model AuthFunnelEvent {
+  id              BigInt     @id @default(autoincrement())
+  registrationKey String // anonymous key linking a register flow's events together
+  userId          String? // set once the account is created
+  step            FunnelStep
+  channel         OtpChannel @default(EMAIL)
+  createdAt       DateTime   @default(now())
+
+  @@index([registrationKey])
+  @@index([step, createdAt])
 }
 
 model AdminUser {

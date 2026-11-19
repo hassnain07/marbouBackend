@@ -206,6 +206,12 @@ export const APPENDIX_C_DEFAULTS: Record<string, DefaultEntry> = {
     type: 'object',
     description: 'Progressive lockout delay steps (minutes). Appendix C.',
   },
+  'auth.lockout.ipMaxAttempts': {
+    value: 20,
+    type: 'number',
+    description:
+      'Failed attempts from one IP (across all accounts) before IP lockout. NOT in PRD Appendix C — open question. Window 1 hour.',
+  },
 
   // ── Messaging throttling ──────────────────────────────────────────────
   'messaging.throttle.perMinutePerUser': {

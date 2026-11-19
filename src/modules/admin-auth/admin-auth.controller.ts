@@ -7,8 +7,10 @@ import { RateLimit } from '../../common/decorators/rate-limit.decorator';
 import { AdminJwtGuard, type AdminAuthContext } from '../../common/guards/admin-jwt.guard';
 import { AdminAuthenticated } from '../../common/decorators/admin-authenticated.decorator';
 import { configuration } from '../../config/configuration';
+import { Public } from '../../common/decorators/public.decorator';
 
 @Controller('api/v1/admin/auth')
+@Public() // Admin routes use AdminJwtGuard; UserJwtGuard must skip this controller
 export class AdminAuthController {
   constructor(private readonly service: AdminAuthService) {}
 

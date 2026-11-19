@@ -12,6 +12,7 @@ import { AppError } from '../../common/errors/app-error';
 import { ErrorCodes } from '../../common/errors/error-codes';
 import { hashPassword } from './argon2-params';
 import { z } from 'zod';
+import { Public } from '../../common/decorators/public.decorator';
 
 // ── Schemas ────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ const patchAdminSchema = z.object({
 
 @Controller('api/v1/admin/admin-users')
 @UseGuards(AdminJwtGuard)
+@Public()
 export class AdminUsersController {
   constructor(
     private readonly repo: AdminAuthRepository,
@@ -141,6 +143,7 @@ export class AdminUsersController {
 
 @Controller('api/v1/admin/admin-sessions')
 @UseGuards(AdminJwtGuard)
+@Public()
 export class AdminSessionsController {
   constructor(
     private readonly repo: AdminAuthRepository,
@@ -175,6 +178,7 @@ export class AdminSessionsController {
 
 @Controller('api/v1/admin/admin-login-logs')
 @UseGuards(AdminJwtGuard)
+@Public()
 export class AdminLoginLogsController {
   constructor(private readonly repo: AdminAuthRepository) {}
 

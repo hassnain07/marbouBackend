@@ -21,9 +21,11 @@ import { ResponseEnvelopeInterceptor } from './common/interceptors/response-enve
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { FlagGuard } from './common/guards/flag.guard';
+import { UserJwtGuard } from './common/guards/user-jwt.guard';
 
 import { PlatformModule } from './modules/platform/platform.module';
 import { AdminAuthModule } from './modules/admin-auth/admin-auth.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 /**
  * AppModule — the modular monolith root (architecture §3). Global modules
@@ -50,6 +52,7 @@ import { AdminAuthModule } from './modules/admin-auth/admin-auth.module';
     QueuesModule,
     PlatformModule,
     AdminAuthModule,
+    AuthModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
@@ -57,6 +60,7 @@ import { AdminAuthModule } from './modules/admin-auth/admin-auth.module';
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     { provide: APP_GUARD, useClass: RateLimitGuard },
     { provide: APP_GUARD, useClass: FlagGuard },
+    { provide: APP_GUARD, useClass: UserJwtGuard },
   ],
 })
 export class AppModule implements NestModule {
